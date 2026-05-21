@@ -1,8 +1,10 @@
+import asyncio
+
 from telegram import Update, Chat, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import ContextTypes
 
 from config import WEB_URL, logger
-from database import get_pin, add_pin, delete_chat_pins, get_all_chat_ids
+from database import get_pin, add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, set_chat_setting
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -22,11 +24,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         pin = get_pin(chat_id, msg_id)
         if not pin:
-            await update.message.reply_text("This video pin no longer exists.")
+            await update.message.reply_text("This cheers pin no longer exists.")
             return
 
         video_file_id, user_name, video_type = pin
-        await update.message.reply_text(f"Video from {user_name}:")
+        await update.message.reply_text(f"Cheers from {user_name}:")
         try:
             if video_type == "video_note":
                 await update.message.reply_video_note(video_file_id)
@@ -41,7 +43,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send a telegram video message in a group where I'm an admin, then share your location — "
         "I'll pin it on the map!\n"
-        "Use /map to view all pins."
+        "Use /map to view all cheers.\n"
+        "For better experience, allow the bot to pinned messages and delete messages."
     )
 
 
@@ -49,7 +52,52 @@ async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     map_url = f"{WEB_URL}/?chat_id={chat_id}"
     keyboard = [[InlineKeyboardButton("Open Map", url=map_url)]]
-    await update.message.reply_text("Click below to open the map:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    pinned_msg_id = get_chat_setting(chat_id, "pinned_map_msg_id")
+    if pinned_msg_id:
+        still_valid = False
+        try:
+            await context.bot.edit_message_text(
+                text="📍 Cheers Map",
+                chat_id=chat_id,
+                message_id=pinned_msg_id,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            still_valid = True
+        except Exception as e:
+            estr = str(e).lower()
+            if "not modified" in estr or "message is not modified" in estr:
+                still_valid = True
+
+        if still_valid:
+            try:
+                await context.bot.pin_chat_message(
+                    chat_id,
+                    pinned_msg_id,
+                    disable_notification=True
+                )
+            except Exception:
+                pass
+            return
+
+    old_pinned_id = pinned_msg_id
+
+    msg = await update.message.reply_text(
+        "📍 Cheers Map",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+    try:
+        await context.bot.pin_chat_message(chat_id, msg.message_id, disable_notification=True)
+        set_chat_setting(chat_id, "pinned_map_msg_id", msg.message_id)
+
+        if old_pinned_id and old_pinned_id != msg.message_id:
+            try:
+                await context.bot.unpin_chat_message(chat_id, old_pinned_id)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.info("Could not pin map message in chat %s (not admin?): %s", chat_id, e)
 
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -85,9 +133,10 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "video_link": video_link,
     }
 
-    await message.reply_text(
-        "Video received! Now tap the 📍 attachment button and send your location to pin it on the map."
+    bot_reply = await message.reply_text(
+        "Cheers received! Now tap the 📍 attachment button and send your location to pin it on the map."
     )
+    context.user_data["bot_reply_message_id"] = bot_reply.message_id
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -111,7 +160,30 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         video_link=pending.get("video_link"),
     )
 
-    await update.message.reply_text("Pinned! Use /map to view the video map.")
+    chat_id = update.effective_chat.id
+    location_msg_id = update.effective_message.message_id
+    bot_reply_msg_id = context.user_data.pop("bot_reply_message_id", None)
+
+    confirmation = await context.bot.send_message(chat_id, "Pinned! Use /map to view the cheers map.")
+
+    await asyncio.sleep(3)
+
+    try:
+        await context.bot.delete_message(chat_id, confirmation.message_id)
+    except Exception:
+        pass
+
+    if bot_reply_msg_id:
+        try:
+            await context.bot.delete_message(chat_id, bot_reply_msg_id)
+        except Exception:
+            pass
+
+    if location_msg_id:
+        try:
+            await context.bot.delete_message(chat_id, location_msg_id)
+        except Exception:
+            pass
 
 
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

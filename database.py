@@ -36,7 +36,46 @@ def migrate_db():
         c.execute("ALTER TABLE pins ADD COLUMN video_link TEXT")
     except sqlite3.OperationalError:
         pass
+    try:
+        c.execute("""
+            CREATE TABLE chat_settings (
+                chat_id INTEGER PRIMARY KEY,
+                pinned_map_msg_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
+    conn.close()
+
+
+def get_chat_setting(chat_id, key):
+    conn = sqlite3.connect(str(DB_PATH))
+    c = conn.cursor()
+    if key == "pinned_map_msg_id":
+        c.execute("SELECT pinned_map_msg_id FROM chat_settings WHERE chat_id = ?", (chat_id,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else None
+    conn.close()
+    return None
+
+
+def set_chat_setting(chat_id, key, value):
+    conn = sqlite3.connect(str(DB_PATH))
+    c = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    if key == "pinned_map_msg_id":
+        c.execute("""
+            INSERT INTO chat_settings (chat_id, pinned_map_msg_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                pinned_map_msg_id = excluded.pinned_map_msg_id,
+                updated_at = excluded.updated_at
+        """, (chat_id, value, now, now))
+        conn.commit()
     conn.close()
 
 
@@ -93,6 +132,11 @@ def delete_chat_pins(chat_id):
     if count > 0:
         c.execute("DELETE FROM pins WHERE chat_id = ?", (chat_id,))
         conn.commit()
+    try:
+        c.execute("DELETE FROM chat_settings WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+    except Exception:
+        pass
     conn.close()
     return count
 
