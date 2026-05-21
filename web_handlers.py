@@ -37,13 +37,16 @@ async def handle_video_proxy(request: web.Request) -> web.StreamResponse:
             if resp.status != 200:
                 raise web.HTTPNotFound(text="file not found on Telegram")
 
-            stream = web.StreamResponse(
-                status=200,
-                headers={
-                    "Content-Type": "video/mp4",
-                    "Accept-Ranges": "bytes",
-                },
-            )
+            headers = {
+                "Content-Type": "video/mp4",
+                "Content-Disposition": "inline",
+                "Accept-Ranges": "bytes",
+            }
+            content_length = resp.headers.get("Content-Length")
+            if content_length:
+                headers["Content-Length"] = content_length
+
+            stream = web.StreamResponse(status=200, headers=headers)
             await stream.prepare(request)
             async for chunk in resp.content.iter_chunked(65536):
                 await stream.write(chunk)

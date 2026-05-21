@@ -37,7 +37,12 @@ async def main() -> None:
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
-    web_app.router.add_get("/", lambda r: web.FileResponse(WEB_DIR / "index.html"))
+    async def index_handler(_request: web.Request) -> web.FileResponse:
+        resp = web.FileResponse(WEB_DIR / "index.html")
+        resp.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
+        return resp
+
+    web_app.router.add_get("/", index_handler)
 
     runner = web.AppRunner(web_app)
     await runner.setup()
