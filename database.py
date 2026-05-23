@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime, timezone
+
 from config import DB_PATH
 
 
@@ -78,19 +79,26 @@ def set_user_pref(user_id, key, value):
     c = conn.cursor()
     now = datetime.now(timezone.utc).isoformat()
     if key == "pin_color":
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO user_preferences (user_id, pin_color, pin_emoji, updated_at)
             VALUES (?, ?, NULL, ?)
             ON CONFLICT(user_id) DO UPDATE SET pin_color = excluded.pin_color, updated_at = excluded.updated_at
-        """, (user_id, value, now))
+        """,
+            (user_id, value, now),
+        )
     elif key == "pin_emoji":
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO user_preferences (user_id, pin_emoji, pin_color, updated_at)
             VALUES (?, ?, NULL, ?)
             ON CONFLICT(user_id) DO UPDATE SET pin_emoji = excluded.pin_emoji, updated_at = excluded.updated_at
-        """, (user_id, value, now))
+        """,
+            (user_id, value, now),
+        )
     conn.commit()
     conn.close()
+
 
 def get_chat_setting(chat_id, key):
     conn = sqlite3.connect(str(DB_PATH))
@@ -109,23 +117,44 @@ def set_chat_setting(chat_id, key, value):
     c = conn.cursor()
     now = datetime.now(timezone.utc).isoformat()
     if key == "pinned_map_msg_id":
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO chat_settings (chat_id, pinned_map_msg_id, created_at, updated_at)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 pinned_map_msg_id = excluded.pinned_map_msg_id,
                 updated_at = excluded.updated_at
-        """, (chat_id, value, now, now))
+        """,
+            (chat_id, value, now, now),
+        )
         conn.commit()
     conn.close()
 
 
-def add_pin(chat_id, message_id, user_id, user_name, video_file_id, lat, lng, video_type="video_note", video_link=None, city=None, country=None, country_code=None):
+def add_pin(
+    chat_id, message_id, user_id, user_name, video_file_id, lat, lng, video_type="video_note", video_link=None, city=None, country=None, country_code=None
+):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
     c.execute(
-        "INSERT INTO pins (chat_id, message_id, user_id, user_name, video_file_id, latitude, longitude, created_at, video_type, video_link, city, country, country_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (chat_id, message_id, user_id, user_name, video_file_id, lat, lng, datetime.now(timezone.utc).isoformat(), video_type, video_link, city, country, country_code),
+        "INSERT INTO pins (chat_id, message_id, user_id, user_name, video_file_id,"
+        " latitude, longitude, created_at, video_type, video_link, city, country, country_code)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            chat_id,
+            message_id,
+            user_id,
+            user_name,
+            video_file_id,
+            lat,
+            lng,
+            datetime.now(timezone.utc).isoformat(),
+            video_type,
+            video_link,
+            city,
+            country,
+            country_code,
+        ),
     )
     conn.commit()
     conn.close()
@@ -144,7 +173,12 @@ def get_pins(chat_id):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
     c.execute(
-        "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id, p.latitude, p.longitude, p.created_at, p.video_link, COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''), p.city, p.country, p.country_code FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id WHERE p.chat_id = ? ORDER BY p.created_at",
+        "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id,"
+        " p.latitude, p.longitude, p.created_at, p.video_link,"
+        " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''),"
+        " p.city, p.country, p.country_code"
+        " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+        " WHERE p.chat_id = ? ORDER BY p.created_at",
         (chat_id,),
     )
     rows = c.fetchall()

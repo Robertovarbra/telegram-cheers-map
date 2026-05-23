@@ -1,12 +1,12 @@
 import asyncio
 
 from aiohttp import ClientSession
-from telegram import Update, Chat, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
-from telegram.error import Forbidden, BadRequest
+from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
 from config import WEB_URL, logger
-from database import get_pin, add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, set_chat_setting, set_user_pref
+from database import add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, get_pin, set_chat_setting, set_user_pref
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -19,7 +19,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         try:
             chat_id = int(rest[:last_])
-            msg_id = int(rest[last_ + 1:])
+            msg_id = int(rest[last_ + 1 :])
         except ValueError:
             await update.message.reply_text("Invalid link.")
             return
@@ -59,12 +59,7 @@ async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if pinned_msg_id:
         still_valid = False
         try:
-            await context.bot.edit_message_text(
-                text="📍 Cheers Map",
-                chat_id=chat_id,
-                message_id=pinned_msg_id,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            await context.bot.edit_message_text(text="📍 Cheers Map", chat_id=chat_id, message_id=pinned_msg_id, reply_markup=InlineKeyboardMarkup(keyboard))
             still_valid = True
         except Exception as e:
             estr = str(e).lower()
@@ -73,21 +68,14 @@ async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if still_valid:
             try:
-                await context.bot.pin_chat_message(
-                    chat_id,
-                    pinned_msg_id,
-                    disable_notification=True
-                )
+                await context.bot.pin_chat_message(chat_id, pinned_msg_id, disable_notification=True)
             except Exception:
                 pass
             return
 
     old_pinned_id = pinned_msg_id
 
-    msg = await update.message.reply_text(
-        "📍 Cheers Map",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    msg = await update.message.reply_text("📍 Cheers Map", reply_markup=InlineKeyboardMarkup(keyboard))
 
     try:
         await context.bot.pin_chat_message(chat_id, msg.message_id, disable_notification=True)
@@ -103,9 +91,14 @@ async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 COLORS = {
-    "🔴 Red": "#e74c3c", "🔵 Blue": "#3498db", "🟢 Green": "#2ecc71",
-    "🟠 Orange": "#f39c12", "🟣 Purple": "#9b59b6", "🟡 Yellow": "#f1c40f",
-    "🩷 Pink": "#e91e63", "🩵 Cyan": "#00bcd4",
+    "🔴 Red": "#e74c3c",
+    "🔵 Blue": "#3498db",
+    "🟢 Green": "#2ecc71",
+    "🟠 Orange": "#f39c12",
+    "🟣 Purple": "#9b59b6",
+    "🟡 Yellow": "#f1c40f",
+    "🩷 Pink": "#e91e63",
+    "🩵 Cyan": "#00bcd4",
 }
 COLOR_EMOJI = {v: k.split()[0] for k, v in COLORS.items()}
 
@@ -115,7 +108,7 @@ async def color_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     kb = []
     for i in range(0, len(keys), 4):
         row = []
-        for name in keys[i:i+4]:
+        for name in keys[i : i + 4]:
             row.append(InlineKeyboardButton(name, callback_data=f"clr_{COLORS[name]}"))
         kb.append(row)
     kb.append([InlineKeyboardButton("❌ Remove custom color", callback_data="clr_")])
@@ -223,9 +216,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "video_link": video_link,
     }
 
-    bot_reply = await message.reply_text(
-        "Cheers received! Now tap the 📍 attachment button and send your location to pin it on the map."
-    )
+    bot_reply = await message.reply_text("Cheers received! Now tap the 📍 attachment button and send your location to pin it on the map.")
     context.user_data["bot_reply_message_id"] = bot_reply.message_id
 
 
@@ -308,10 +299,7 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
     if new_status in (ChatMember.LEFT, ChatMember.BANNED):
         chat_name = chat.title or str(chat.id)
         deleted = delete_chat_pins(chat.id)
-        logger.info(
-            "Bot removed from chat '%s' (id: %s). Deleted %s pin(s) from database.",
-            chat_name, chat.id, deleted
-        )
+        logger.info("Bot removed from chat '%s' (id: %s). Deleted %s pin(s) from database.", chat_name, chat.id, deleted)
 
 
 async def cleanup_inactive_chats(bot):
