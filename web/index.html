@@ -15,7 +15,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .popup-name { font-weight: 600; font-size: 15px; }
 .popup-time { color: #666; font-size: 12px; margin-top: 2px; }
 .popup-video { display: block; width: 100%; border-radius: 10px; background: #000; }
-.popup-scroll .popup-video { height: 200px; object-fit: cover; }
+.popup-scroll .popup-video { height: 200px; object-fit: cover; cursor: pointer; }
 .popup-scroll { max-height: 440px; overflow-y: auto; overscroll-behavior: contain; }
 .popup-scroll::-webkit-scrollbar { width: 4px; }
 .popup-scroll::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
@@ -42,6 +42,19 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 var bounds = [];
 var groups = {};
 var userColors = {};
+var GROUP_RADIUS = 10;
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  var R = 6371000;
+  function toRad(d) { return d * Math.PI / 180; }
+  var dLat = toRad(lat2 - lat1);
+  var dLon = toRad(lon2 - lon1);
+  var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+          Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+          Math.sin(dLon/2) * Math.sin(dLon/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 
 function getColor(uid) {
   var pal = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e67e22','#34495e','#e91e63','#00bcd4'];
@@ -54,9 +67,19 @@ fetch('/api/pins?chat_id=' + encodeURIComponent(chatId))
   .then(function(pins) {
     if (pins.length === 0) return;
     pins.forEach(function(p) {
-      var key = Math.round(p.latitude * 10000) + ',' + Math.round(p.longitude * 10000);
-      if (!groups[key]) groups[key] = { lat: p.latitude, lng: p.longitude, pins: [] };
-      groups[key].pins.push(p);
+      var found = false;
+      for (var k in groups) {
+        if (haversineDistance(groups[k].lat, groups[k].lng, p.latitude, p.longitude) <= GROUP_RADIUS) {
+          groups[k].pins.push(p);
+          groups[k].lat = (groups[k].lat * (groups[k].pins.length - 1) + p.latitude) / groups[k].pins.length;
+          groups[k].lng = (groups[k].lng * (groups[k].pins.length - 1) + p.longitude) / groups[k].pins.length;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        groups[p.latitude + ',' + p.longitude] = { lat: p.latitude, lng: p.longitude, pins: [p] };
+      }
     });
     for (var k in groups) {
       var g = groups[k];
@@ -84,7 +107,7 @@ function addMarker(lat, lng, p) {
   L.marker([lat, lng], { icon: icon }).addTo(map).bindPopup(
     '<div class="popup-name">' + esc(p.user_name) + '</div>' +
     '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
-    '<video class="popup-video" src="/api/video?file_id=' + p.video_file_id + '" controls preload="metadata"></video>'
+    '<video class="popup-video" src="/api/video?file_id=' + p.video_file_id + '" controls preload="metadata" playsinline></video>'
   );
 }
 
@@ -102,11 +125,20 @@ function addGroupMarker(lat, lng, pins) {
   pins.forEach(function(p) {
     html += '<div class="popup-entry"><div class="popup-name" style="color:' + getColor(p.user_id) + ';">● ' + esc(p.user_name) + '</div>' +
       '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
-      '<video class="popup-video" src="/api/video?file_id=' + p.video_file_id + '" controls preload="metadata"></video></div>';
+      '<video class="popup-video" data-file-id="' + p.video_file_id + '" controls preload="none" playsinline></video></div>';
   });
   html += '</div>';
   L.marker([lat, lng], { icon: icon }).addTo(map).bindPopup(html);
 }
+
+document.addEventListener('click', function(e) {
+  var v = e.target.closest('video[data-file-id]');
+  if (v && !v.src) {
+    v.src = '/api/video?file_id=' + v.dataset.fileId;
+    v.removeAttribute('data-file-id');
+    v.play();
+  }
+}, true);
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 </script>

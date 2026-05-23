@@ -50,7 +50,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    map_url = f"{WEB_URL}/?chat_id={chat_id}"
+    map_url = f"{WEB_URL}/?chat_id={chat_id}&v=1"
     keyboard = [[InlineKeyboardButton("Open Map", url=map_url)]]
 
     pinned_msg_id = get_chat_setting(chat_id, "pinned_map_msg_id")
