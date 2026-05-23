@@ -1,6 +1,5 @@
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from config import DB_PATH
 
 
@@ -47,9 +46,39 @@ def migrate_db():
         """)
     except sqlite3.OperationalError:
         pass
+    try:
+        c.execute("""
+            CREATE TABLE user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                pin_color TEXT,
+                pin_emoji TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
+
+def set_user_pref(user_id, key, value):
+    conn = sqlite3.connect(str(DB_PATH))
+    c = conn.cursor()
+    now = datetime.now(timezone.utc).isoformat()
+    if key == "pin_color":
+        c.execute("""
+            INSERT INTO user_preferences (user_id, pin_color, pin_emoji, updated_at)
+            VALUES (?, ?, NULL, ?)
+            ON CONFLICT(user_id) DO UPDATE SET pin_color = excluded.pin_color, updated_at = excluded.updated_at
+        """, (user_id, value, now))
+    elif key == "pin_emoji":
+        c.execute("""
+            INSERT INTO user_preferences (user_id, pin_emoji, pin_color, updated_at)
+            VALUES (?, ?, NULL, ?)
+            ON CONFLICT(user_id) DO UPDATE SET pin_emoji = excluded.pin_emoji, updated_at = excluded.updated_at
+        """, (user_id, value, now))
+    conn.commit()
+    conn.close()
 
 def get_chat_setting(chat_id, key):
     conn = sqlite3.connect(str(DB_PATH))
@@ -103,7 +132,7 @@ def get_pins(chat_id):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
     c.execute(
-        "SELECT id, message_id, user_id, user_name, video_file_id, latitude, longitude, created_at, video_link FROM pins WHERE chat_id = ? ORDER BY created_at",
+        "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id, p.latitude, p.longitude, p.created_at, p.video_link, COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, '') FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id WHERE p.chat_id = ? ORDER BY p.created_at",
         (chat_id,),
     )
     rows = c.fetchall()
@@ -119,6 +148,8 @@ def get_pins(chat_id):
             "longitude": r[6],
             "created_at": r[7],
             "video_link": r[8],
+            "pin_color": r[9] or None,
+            "pin_emoji": r[10] or None,
         }
         for r in rows
     ]

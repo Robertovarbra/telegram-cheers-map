@@ -1,6 +1,5 @@
 from aiohttp import web, ClientSession as AiohttpClient
 
-from config import WEB_DIR, logger
 from database import get_pins
 
 

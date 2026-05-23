@@ -6,6 +6,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ChatMemberHandler,
 )
@@ -15,6 +16,10 @@ from database import init_db, migrate_db
 from telegram_handlers import (
     start,
     map_command,
+    color_command,
+    emoji_command,
+    handle_pref_callback,
+    handle_emoji_text,
     handle_video,
     handle_location,
     handle_my_chat_member,
@@ -50,6 +55,10 @@ async def main() -> None:
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("map", map_command))
+    application.add_handler(CommandHandler("color", color_command))
+    application.add_handler(CommandHandler("emoji", emoji_command))
+    application.add_handler(CallbackQueryHandler(handle_pref_callback))
+    application.add_handler(MessageHandler(filters.TEXT, handle_emoji_text))
     application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))

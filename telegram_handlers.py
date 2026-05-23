@@ -1,10 +1,11 @@
 import asyncio
 
 from telegram import Update, Chat, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
+from telegram.error import Forbidden, BadRequest
 from telegram.ext import ContextTypes
 
 from config import WEB_URL, logger
-from database import get_pin, add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, set_chat_setting
+from database import get_pin, add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, set_chat_setting, set_user_pref
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -100,6 +101,96 @@ async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.info("Could not pin map message in chat %s (not admin?): %s", chat_id, e)
 
 
+COLORS = {
+    "🔴 Red": "#e74c3c", "🔵 Blue": "#3498db", "🟢 Green": "#2ecc71",
+    "🟠 Orange": "#f39c12", "🟣 Purple": "#9b59b6", "🟡 Yellow": "#f1c40f",
+    "🩷 Pink": "#e91e63", "🩵 Cyan": "#00bcd4",
+}
+COLOR_EMOJI = {v: k.split()[0] for k, v in COLORS.items()}
+
+
+async def color_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    keys = list(COLORS.keys())
+    kb = []
+    for i in range(0, len(keys), 4):
+        row = []
+        for name in keys[i:i+4]:
+            row.append(InlineKeyboardButton(name, callback_data=f"clr_{COLORS[name]}"))
+        kb.append(row)
+    kb.append([InlineKeyboardButton("❌ Remove custom color", callback_data="clr_")])
+    kb.append([InlineKeyboardButton("Skip", callback_data="skip")])
+    await update.message.reply_text("🎨 Choose your pin color:", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = await update.message.reply_text(
+        "😀 Type any emoji from your keyboard to use as your pin.\n\n"
+        "Options:\n"
+        "• Send any emoji to set it\n"
+        "• /none  to remove your custom emoji\n"
+        "• /skip  to close without changes"
+    )
+    context.user_data["awaiting_emoji"] = {"prompt_id": msg.message_id, "chat_id": msg.chat_id}
+
+
+async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    pending = context.user_data.pop("awaiting_emoji", None)
+    if not pending:
+        return
+
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+    chat_id = update.message.chat_id
+    prompt_id = pending["prompt_id"]
+    user_msg_id = update.message.message_id
+
+    if text in ("/none", "/skip", "none", "skip"):
+        if text in ("/none", "none"):
+            set_user_pref(user_id, "pin_emoji", None)
+            reply = await update.message.reply_text("✅ Custom emoji removed.")
+        else:
+            reply = await update.message.reply_text("Skipped.")
+    elif len(text) <= 10:
+        set_user_pref(user_id, "pin_emoji", text)
+        reply = await update.message.reply_text(f"Pin emoji set to {text}!")
+    else:
+        reply = await update.message.reply_text("❌ That's too long. Send a single emoji or /none.")
+
+    await asyncio.sleep(3)
+    for mid in (prompt_id, user_msg_id, reply.message_id):
+        try:
+            await context.bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
+
+
+async def handle_pref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+    try:
+        if data == "skip":
+            await context.bot.delete_message(chat_id, message_id)
+            return
+        if data.startswith("clr_"):
+            color = data[4:]
+            if color:
+                set_user_pref(user_id, "pin_color", color)
+                emoji = COLOR_EMOJI.get(color, "")
+                await query.edit_message_text(f"{emoji} Pin color set!")
+            else:
+                set_user_pref(user_id, "pin_color", None)
+                await query.edit_message_text("✅ Custom color removed.")
+        await asyncio.sleep(3)
+        await context.bot.delete_message(chat_id, message_id)
+    except Exception as e:
+        logger.warning("Could not edit preference message: %s", e)
+
+
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if chat.type not in ("group", "supergroup"):
@@ -111,7 +202,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     file_id = message.video_note.file_id
-    video_type = "video_note"
 
     user = message.from_user
     user_name = user.full_name or user.username or str(user.id)
@@ -125,7 +215,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     context.user_data["pending_video"] = {
         "file_id": file_id,
-        "video_type": video_type,
         "message_id": message.message_id,
         "chat_id": message.chat_id,
         "user_id": user.id,
@@ -156,7 +245,6 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         video_file_id=pending["file_id"],
         lat=location.latitude,
         lng=location.longitude,
-        video_type=pending.get("video_type", "video_note"),
         video_link=pending.get("video_link"),
     )
 
@@ -168,22 +256,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     await asyncio.sleep(3)
 
-    try:
-        await context.bot.delete_message(chat_id, confirmation.message_id)
-    except Exception:
-        pass
-
-    if bot_reply_msg_id:
-        try:
-            await context.bot.delete_message(chat_id, bot_reply_msg_id)
-        except Exception:
-            pass
-
-    if location_msg_id:
-        try:
-            await context.bot.delete_message(chat_id, location_msg_id)
-        except Exception:
-            pass
+    for mid in (confirmation.message_id, bot_reply_msg_id, location_msg_id):
+        if mid:
+            try:
+                await context.bot.delete_message(chat_id, mid)
+            except Exception:
+                pass
 
 
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -212,9 +290,6 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def cleanup_inactive_chats(bot):
-    from telegram.error import Forbidden, BadRequest
-    from telegram import ChatMember
-
     chat_ids = get_all_chat_ids()
     if not chat_ids:
         return
