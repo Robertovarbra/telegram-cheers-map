@@ -31,21 +31,30 @@ async def handle_video_proxy(request: web.Request) -> web.StreamResponse:
     except Exception:
         raise web.HTTPNotFound(text="file not found")
 
+    range_header = request.headers.get("Range", "")
+
     async with AiohttpClient() as session:
-        async with session.get(file.file_path) as resp:
-            if resp.status != 200:
+        req_headers = {}
+        if range_header:
+            req_headers["Range"] = range_header
+
+        async with session.get(file.file_path, headers=req_headers) as resp:
+            if resp.status == 404:
                 raise web.HTTPNotFound(text="file not found on Telegram")
+            if resp.status not in (200, 206):
+                raise web.HTTPNotFound(text="unexpected response from Telegram")
 
             headers = {
                 "Content-Type": "video/mp4",
                 "Content-Disposition": "inline",
                 "Accept-Ranges": "bytes",
             }
-            content_length = resp.headers.get("Content-Length")
-            if content_length:
-                headers["Content-Length"] = content_length
+            if "Content-Length" in resp.headers:
+                headers["Content-Length"] = resp.headers["Content-Length"]
+            if "Content-Range" in resp.headers:
+                headers["Content-Range"] = resp.headers["Content-Range"]
 
-            stream = web.StreamResponse(status=200, headers=headers)
+            stream = web.StreamResponse(status=resp.status, headers=headers)
             await stream.prepare(request)
             async for chunk in resp.content.iter_chunked(65536):
                 await stream.write(chunk)

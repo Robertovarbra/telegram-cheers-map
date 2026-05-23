@@ -50,6 +50,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .filter-count { font-size: 11px; color: #888; margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee; }
 #filter-bounds { vertical-align: middle; }
 #user-filters { max-height: 95px; overflow-y: auto; }
+.filter-action { font-size: 11px; text-transform: none; cursor: pointer; }
+.filter-action.all { color: #3498db; }
+.filter-action.none { color: #888; }
+.filter-input { width: 100%; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; padding: 3px 5px; margin-bottom: 2px; }
 </style>
 </head>
 <body>
@@ -57,12 +61,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <div id="filter-toggle" title="Toggle filters">🔽</div>
 <div id="filter-panel" class="hidden">
   <div class="filter-section">
-    <h4>Users <span class="filter-select-all" style="font-size:11px;text-transform:none;cursor:pointer;color:#3498db;">All</span> <span class="filter-select-none" style="font-size:11px;text-transform:none;cursor:pointer;color:#888;">None</span></h4>
+    <h4>Users <span class="filter-action all filter-select-all">All</span> <span class="filter-action none filter-select-none">None</span></h4>
     <div id="user-filters"></div>
   </div>
   <div class="filter-section">
     <h4>Location</h4>
-    <input type="text" id="filter-location" placeholder="City or country..." style="width:100%;font-size:12px;border:1px solid #ccc;border-radius:4px;padding:3px 5px;margin-bottom:2px;">
+    <input type="text" id="filter-location" placeholder="City or country..." class="filter-input">
     <span class="filter-clear" id="location-clear">Clear</span>
     <label style="display:block;margin-top:4px;"><input type="checkbox" id="filter-bounds"> Only in map view</label>
   </div>
@@ -140,7 +144,7 @@ function populateFilters(pins) {
   var html = '';
   sorted.forEach(function(uid) {
     var u = userMap[uid];
-    var dot = u.emoji ? '<span class="emoji-dot">' + u.emoji + '</span>' : '<span class="color-dot" style="background:' + u.color + '"></span>';
+    var dot = u.emoji ? '<span class="emoji-dot">' + esc(u.emoji) + '</span>' : '<span class="color-dot" style="background:' + u.color + '"></span>';
     html += '<div class="filter-user"><input type="checkbox" class="filter-user-cb" value="' + uid + '" checked>' +
       dot +
       '<label>' + esc(u.name) + '</label></div>';
@@ -286,7 +290,7 @@ function addMarker(lat, lng, p) {
   }
   markerGroup.addLayer(L.marker([lat, lng], { icon: icon }).bindPopup(
     '<div class="popup-name">' + esc(p.user_name) + '</div>' +
-    (p.city || p.country ? '<div class="popup-time">' + [p.city, p.country].filter(Boolean).join(', ') + (p.country_code ? ' (' + p.country_code + ')' : '') + '</div>' : '') +
+    (p.city || p.country ? '<div class="popup-time">' + [p.city, p.country].filter(Boolean).map(esc).join(', ') + (p.country_code ? ' (' + esc(p.country_code) + ')' : '') + '</div>' : '') +
     '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
     '<video class="popup-video" src="/api/video?file_id=' + p.video_file_id + '" controls preload="metadata" playsinline></video>'
   ));
@@ -336,7 +340,7 @@ function addGroupMarker(lat, lng, pins) {
     var badge = '<span style="position:absolute;bottom:-2px;right:0;color:#fff;font-size:10px;font-weight:700;text-shadow:0 0 4px rgba(0,0,0,0.8);">' + pins.length + '</span>';
     content = '<div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:' + c + ';border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' +
       '<span style="font-size:' + fontSize + ';">' + topEmoji + '</span>' +
-      ((allSame && pins[0].pin_emoji && pins.length === 1) ? '' : badge) +
+      badge +
       '</div>';
   } else {
     content = '<div style="width:36px;height:36px;border-radius:50%;background:' + c + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' + pins.length + '</div>';
@@ -355,7 +359,7 @@ function addGroupMarker(lat, lng, pins) {
     var nameColor = getColor(p.user_id, p.pin_color);
     var loc = [p.city, p.country].filter(Boolean).join(', ');
     if (p.country_code) loc += ' (' + p.country_code + ')';
-    html += '<div class="popup-entry"><div class="popup-name" style="color:' + nameColor + ';">' + (p.pin_emoji || '●') + ' ' + esc(p.user_name) + '</div>' +
+    html += '<div class="popup-entry"><div class="popup-name" style="color:' + nameColor + ';">' + (p.pin_emoji ? esc(p.pin_emoji) : '●') + ' ' + esc(p.user_name) + '</div>' +
       (loc ? '<div class="popup-time">' + esc(loc) + '</div>' : '') +
       '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
       '<video class="popup-video" data-file-id="' + p.video_file_id + '" controls preload="none" playsinline></video></div>';

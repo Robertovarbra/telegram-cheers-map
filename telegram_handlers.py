@@ -29,7 +29,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("This cheers pin no longer exists.")
             return
 
-        video_file_id, user_name, video_type = pin
+        video_file_id, user_name, video_type, _, _, _ = pin
         await update.message.reply_text(f"Cheers from {user_name}:")
         try:
             if video_type == "video_note":
