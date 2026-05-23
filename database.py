@@ -173,11 +173,9 @@ def get_pins(chat_id):
 def delete_chat_pins(chat_id):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM pins WHERE chat_id = ?", (chat_id,))
-    count = c.fetchone()[0]
-    if count > 0:
-        c.execute("DELETE FROM pins WHERE chat_id = ?", (chat_id,))
-        conn.commit()
+    c.execute("DELETE FROM pins WHERE chat_id = ?", (chat_id,))
+    count = c.rowcount
+    conn.commit()
     try:
         c.execute("DELETE FROM chat_settings WHERE chat_id = ?", (chat_id,))
         conn.commit()
