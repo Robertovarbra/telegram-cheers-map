@@ -1,5 +1,6 @@
 import asyncio
 
+from aiohttp import ClientSession
 from telegram import Update, Chat, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.error import Forbidden, BadRequest
 from telegram.ext import ContextTypes
@@ -228,6 +229,25 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     context.user_data["bot_reply_message_id"] = bot_reply.message_id
 
 
+async def reverse_geocode(lat, lng):
+    try:
+        async with ClientSession() as session:
+            url = "https://nominatim.openstreetmap.org/reverse"
+            params = {"format": "jsonv2", "lat": lat, "lon": lng}
+            headers = {"User-Agent": "TelegramCheersMap/1.0", "Accept-Language": "en"}
+            async with session.get(url, params=params, headers=headers) as resp:
+                if resp.status != 200:
+                    return None, None, None
+                data = await resp.json()
+                addr = data.get("address", {})
+                city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("municipality")
+                country = addr.get("country")
+                country_code = addr.get("country_code")
+                return city, country, country_code
+    except Exception:
+        return None, None, None
+
+
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     pending = context.user_data.pop("pending_video", None)
     if not pending:
@@ -236,6 +256,8 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     location = update.message.location
     if not location:
         return
+
+    city, country, country_code = await reverse_geocode(location.latitude, location.longitude)
 
     add_pin(
         chat_id=pending["chat_id"],
@@ -246,6 +268,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lat=location.latitude,
         lng=location.longitude,
         video_link=pending.get("video_link"),
+        city=city,
+        country=country,
+        country_code=country_code,
     )
 
     chat_id = update.effective_chat.id

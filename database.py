@@ -36,6 +36,18 @@ def migrate_db():
     except sqlite3.OperationalError:
         pass
     try:
+        c.execute("ALTER TABLE pins ADD COLUMN city TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE pins ADD COLUMN country TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE pins ADD COLUMN country_code TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
         c.execute("""
             CREATE TABLE chat_settings (
                 chat_id INTEGER PRIMARY KEY,
@@ -108,12 +120,12 @@ def set_chat_setting(chat_id, key, value):
     conn.close()
 
 
-def add_pin(chat_id, message_id, user_id, user_name, video_file_id, lat, lng, video_type="video_note", video_link=None):
+def add_pin(chat_id, message_id, user_id, user_name, video_file_id, lat, lng, video_type="video_note", video_link=None, city=None, country=None, country_code=None):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
     c.execute(
-        "INSERT INTO pins (chat_id, message_id, user_id, user_name, video_file_id, latitude, longitude, created_at, video_type, video_link) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (chat_id, message_id, user_id, user_name, video_file_id, lat, lng, datetime.now(timezone.utc).isoformat(), video_type, video_link),
+        "INSERT INTO pins (chat_id, message_id, user_id, user_name, video_file_id, latitude, longitude, created_at, video_type, video_link, city, country, country_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (chat_id, message_id, user_id, user_name, video_file_id, lat, lng, datetime.now(timezone.utc).isoformat(), video_type, video_link, city, country, country_code),
     )
     conn.commit()
     conn.close()
@@ -122,7 +134,7 @@ def add_pin(chat_id, message_id, user_id, user_name, video_file_id, lat, lng, vi
 def get_pin(chat_id, message_id):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
-    c.execute("SELECT video_file_id, user_name, video_type FROM pins WHERE chat_id = ? AND message_id = ?", (chat_id, message_id))
+    c.execute("SELECT video_file_id, user_name, video_type, city, country, country_code FROM pins WHERE chat_id = ? AND message_id = ?", (chat_id, message_id))
     row = c.fetchone()
     conn.close()
     return row
@@ -132,7 +144,7 @@ def get_pins(chat_id):
     conn = sqlite3.connect(str(DB_PATH))
     c = conn.cursor()
     c.execute(
-        "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id, p.latitude, p.longitude, p.created_at, p.video_link, COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, '') FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id WHERE p.chat_id = ? ORDER BY p.created_at",
+        "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id, p.latitude, p.longitude, p.created_at, p.video_link, COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''), p.city, p.country, p.country_code FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id WHERE p.chat_id = ? ORDER BY p.created_at",
         (chat_id,),
     )
     rows = c.fetchall()
@@ -150,6 +162,9 @@ def get_pins(chat_id):
             "video_link": r[8],
             "pin_color": r[9] or None,
             "pin_emoji": r[10] or None,
+            "city": r[11],
+            "country": r[12],
+            "country_code": r[13],
         }
         for r in rows
     ]

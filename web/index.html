@@ -21,10 +21,60 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .popup-scroll::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
 .popup-entry + .popup-entry { margin-top: 8px; padding-top: 8px; border-top: 1px solid #eee; }
 .marker-label { position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 700; color: #333; white-space: nowrap; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+
+#filter-toggle {
+  position: absolute; top: 10px; right: 10px; z-index: 1000;
+  width: 36px; height: 36px; border-radius: 6px; border: 2px solid rgba(0,0,0,0.2);
+  background: #fff; cursor: pointer; font-size: 18px; line-height: 32px; text-align: center;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.3);
+}
+#filter-panel {
+  position: absolute; top: 52px; right: 10px; z-index: 1000;
+  background: #fff; border-radius: 8px; padding: 12px 14px;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.3); min-width: 200px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px; max-height: calc(100vh - 80px); overflow-y: auto;
+}
+#filter-panel.hidden { display: none; }
+.filter-section { margin-bottom: 10px; }
+.filter-section:last-child { margin-bottom: 0; }
+.filter-section h4 { font-size: 11px; text-transform: uppercase; color: #888; margin-bottom: 4px; letter-spacing: 0.5px; }
+.filter-user { display: flex; align-items: center; gap: 4px; margin: 2px 0; cursor: pointer; }
+.filter-user input { margin: 0; }
+.filter-user .color-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.filter-user .emoji-dot { font-size: 14px; line-height: 10px; flex-shrink: 0; }
+.filter-user label { cursor: pointer; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filter-date { display: flex; align-items: center; gap: 4px; }
+.filter-date input { flex: 1; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; padding: 2px 4px; }
+.filter-clear { color: #e74c3c; cursor: pointer; font-size: 11px; display: inline-block; margin-top: 2px; }
+.filter-count { font-size: 11px; color: #888; margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee; }
+#filter-bounds { vertical-align: middle; }
+#user-filters { max-height: 95px; overflow-y: auto; }
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="filter-toggle" title="Toggle filters">🔽</div>
+<div id="filter-panel" class="hidden">
+  <div class="filter-section">
+    <h4>Users <span class="filter-select-all" style="font-size:11px;text-transform:none;cursor:pointer;color:#3498db;">All</span> <span class="filter-select-none" style="font-size:11px;text-transform:none;cursor:pointer;color:#888;">None</span></h4>
+    <div id="user-filters"></div>
+  </div>
+  <div class="filter-section">
+    <h4>Location</h4>
+    <input type="text" id="filter-location" placeholder="City or country..." style="width:100%;font-size:12px;border:1px solid #ccc;border-radius:4px;padding:3px 5px;margin-bottom:2px;">
+    <span class="filter-clear" id="location-clear">Clear</span>
+    <label style="display:block;margin-top:4px;"><input type="checkbox" id="filter-bounds"> Only in map view</label>
+  </div>
+  <div class="filter-section">
+    <h4>Date</h4>
+    <div class="filter-date">
+      <input type="date" id="date-from"> <span>—</span> <input type="date" id="date-to">
+    </div>
+    <span class="filter-clear" id="date-clear">Clear dates</span>
+  </div>
+  <div class="filter-count" id="filter-count"></div>
+</div>
 <script>
 const params = new URLSearchParams(window.location.search);
 const chatId = params.get('chat_id');
@@ -39,14 +89,15 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
 
-var bounds = [];
-var groups = {};
+var allPins = [];
+var markerGroup = L.layerGroup().addTo(map);
 var userColors = {};
 var GROUP_RADIUS = 10;
 
+function toRad(d) { return d * Math.PI / 180; }
+
 function haversineDistance(lat1, lon1, lat2, lon2) {
   var R = 6371000;
-  function toRad(d) { return d * Math.PI / 180; }
   var dLat = toRad(lat2 - lat1);
   var dLon = toRad(lon2 - lon1);
   var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -55,7 +106,6 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-
 function getColor(uid, customColor) {
   if (customColor) return customColor;
   var pal = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e67e22','#34495e','#e91e63','#00bcd4'];
@@ -63,38 +113,156 @@ function getColor(uid, customColor) {
   return userColors[uid];
 }
 
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
 fetch('/api/pins?chat_id=' + encodeURIComponent(chatId))
   .then(function(r) { if (!r.ok) throw new Error('Failed'); return r.json(); })
   .then(function(pins) {
+    allPins = pins;
     if (pins.length === 0) return;
-    pins.forEach(function(p) {
-      var found = false;
-      for (var k in groups) {
-        if (haversineDistance(groups[k].lat, groups[k].lng, p.latitude, p.longitude) <= GROUP_RADIUS) {
-          groups[k].pins.push(p);
-          groups[k].lat = (groups[k].lat * (groups[k].pins.length - 1) + p.latitude) / groups[k].pins.length;
-          groups[k].lng = (groups[k].lng * (groups[k].pins.length - 1) + p.longitude) / groups[k].pins.length;
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        groups[p.latitude + ',' + p.longitude] = { lat: p.latitude, lng: p.longitude, pins: [p] };
-      }
-    });
-    for (var k in groups) {
-      var g = groups[k];
-      bounds.push([g.lat, g.lng]);
-      if (g.pins.length === 1) {
-        var p = g.pins[0];
-        addMarker(g.lat, g.lng, p);
-      } else {
-        addGroupMarker(g.lat, g.lng, g.pins);
-      }
-    }
-    if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+    populateFilters(pins);
+    renderMarkers();
   })
   .catch(function(e) { console.error('Map error:', e); });
+
+function populateFilters(pins) {
+  var userMap = {};
+  var minDate = '', maxDate = '';
+  pins.forEach(function(p) {
+    if (!userMap[p.user_id]) {
+      userMap[p.user_id] = { name: p.user_name, color: getColor(p.user_id, p.pin_color), emoji: p.pin_emoji };
+    }
+    var d = p.created_at.split('T')[0];
+    if (!minDate || d < minDate) minDate = d;
+    if (!maxDate || d > maxDate) maxDate = d;
+  });
+  var sorted = Object.keys(userMap).sort(function(a, b) { return userMap[a].name.localeCompare(userMap[b].name); });
+  var html = '';
+  sorted.forEach(function(uid) {
+    var u = userMap[uid];
+    var dot = u.emoji ? '<span class="emoji-dot">' + u.emoji + '</span>' : '<span class="color-dot" style="background:' + u.color + '"></span>';
+    html += '<div class="filter-user"><input type="checkbox" class="filter-user-cb" value="' + uid + '" checked>' +
+      dot +
+      '<label>' + esc(u.name) + '</label></div>';
+  });
+  document.getElementById('user-filters').innerHTML = html;
+  document.getElementById('user-filters').addEventListener('change', scheduleRender);
+
+  document.querySelector('.filter-select-all').addEventListener('click', function() {
+    document.querySelectorAll('.filter-user-cb').forEach(function(cb) { cb.checked = true; });
+    scheduleRender();
+  });
+  document.querySelector('.filter-select-none').addEventListener('click', function() {
+    document.querySelectorAll('.filter-user-cb').forEach(function(cb) { cb.checked = false; });
+    scheduleRender();
+  });
+
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  document.getElementById('date-from').min = minDate;
+  document.getElementById('date-from').max = maxDate;
+  document.getElementById('date-to').min = minDate;
+  document.getElementById('date-to').max = maxDate;
+  document.getElementById('date-from').addEventListener('change', scheduleRender);
+  document.getElementById('date-to').addEventListener('change', scheduleRender);
+  document.getElementById('date-clear').addEventListener('click', function() {
+    document.getElementById('date-from').value = '';
+    document.getElementById('date-to').value = '';
+    scheduleRender();
+  });
+
+  document.getElementById('filter-bounds').addEventListener('change', function() {
+    if (this.checked) {
+      map.on('moveend', onMapMove);
+    } else {
+      map.off('moveend', onMapMove);
+    }
+    scheduleRender();
+  });
+
+  document.getElementById('filter-location').addEventListener('input', scheduleRender);
+  document.getElementById('location-clear').addEventListener('click', function() {
+    document.getElementById('filter-location').value = '';
+    scheduleRender();
+  });
+
+  document.getElementById('filter-toggle').addEventListener('click', function() {
+    var p = document.getElementById('filter-panel');
+    p.classList.toggle('hidden');
+    this.textContent = p.classList.contains('hidden') ? '🔽' : '🔼';
+  });
+}
+
+var renderTimer = null;
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderMarkers, 500);
+}
+
+function onMapMove() {
+  scheduleRender();
+}
+
+function getFilteredPins() {
+  var selected = {};
+  document.querySelectorAll('.filter-user-cb:checked').forEach(function(cb) { selected[cb.value] = true; });
+  var dateFrom = document.getElementById('date-from').value;
+  var dateTo = document.getElementById('date-to').value;
+  var boundsOnly = document.getElementById('filter-bounds').checked;
+  var bounds = boundsOnly ? map.getBounds() : null;
+  var locText = document.getElementById('filter-location').value.trim().toLowerCase();
+
+  return allPins.filter(function(p) {
+    if (!selected[p.user_id]) return false;
+    if (dateFrom && p.created_at < dateFrom) return false;
+    if (dateTo && p.created_at.split('T')[0] > dateTo) return false;
+    if (bounds && !bounds.contains([p.latitude, p.longitude])) return false;
+    if (locText) {
+      var city = (p.city || '').toLowerCase();
+      var country = (p.country || '').toLowerCase();
+      var code = (p.country_code || '').toLowerCase();
+      if (city.indexOf(locText) === -1 && country.indexOf(locText) === -1 && code.indexOf(locText) === -1) return false;
+    }
+    return true;
+  });
+}
+
+function renderMarkers() {
+  markerGroup.clearLayers();
+  var filtered = getFilteredPins();
+  if (filtered.length === 0) {
+    document.getElementById('filter-count').textContent = '0 pins match filters';
+    return;
+  }
+  var groups = {};
+  filtered.forEach(function(p) {
+    var found = false;
+    for (var k in groups) {
+      if (haversineDistance(groups[k].lat, groups[k].lng, p.latitude, p.longitude) <= GROUP_RADIUS) {
+        groups[k].pins.push(p);
+        groups[k].lat = (groups[k].lat * (groups[k].pins.length - 1) + p.latitude) / groups[k].pins.length;
+        groups[k].lng = (groups[k].lng * (groups[k].pins.length - 1) + p.longitude) / groups[k].pins.length;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      groups[p.latitude + ',' + p.longitude] = { lat: p.latitude, lng: p.longitude, pins: [p] };
+    }
+  });
+  var bounds = [];
+  for (var k in groups) {
+    var g = groups[k];
+    bounds.push([g.lat, g.lng]);
+    if (g.pins.length === 1) {
+      addMarker(g.lat, g.lng, g.pins[0]);
+    } else {
+      addGroupMarker(g.lat, g.lng, g.pins);
+    }
+  }
+  if (bounds.length) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+  document.getElementById('filter-count').textContent = filtered.length + ' of ' + allPins.length + ' pins shown';
+}
 
 function addMarker(lat, lng, p) {
   var c = getColor(p.user_id, p.pin_color);
@@ -116,11 +284,12 @@ function addMarker(lat, lng, p) {
       popupAnchor: [0, -42],
     });
   }
-  L.marker([lat, lng], { icon: icon }).addTo(map).bindPopup(
+  markerGroup.addLayer(L.marker([lat, lng], { icon: icon }).bindPopup(
     '<div class="popup-name">' + esc(p.user_name) + '</div>' +
+    (p.city || p.country ? '<div class="popup-time">' + [p.city, p.country].filter(Boolean).join(', ') + (p.country_code ? ' (' + p.country_code + ')' : '') + '</div>' : '') +
     '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
     '<video class="popup-video" src="/api/video?file_id=' + p.video_file_id + '" controls preload="metadata" playsinline></video>'
-  );
+  ));
 }
 
 function addGroupMarker(lat, lng, pins) {
@@ -180,15 +349,20 @@ function addGroupMarker(lat, lng, pins) {
     iconAnchor: [18, 18],
     popupAnchor: [0, -18],
   });
+  var marker = L.marker([lat, lng], { icon: icon });
   var html = '<div class="popup-scroll">';
   pins.forEach(function(p) {
     var nameColor = getColor(p.user_id, p.pin_color);
+    var loc = [p.city, p.country].filter(Boolean).join(', ');
+    if (p.country_code) loc += ' (' + p.country_code + ')';
     html += '<div class="popup-entry"><div class="popup-name" style="color:' + nameColor + ';">' + (p.pin_emoji || '●') + ' ' + esc(p.user_name) + '</div>' +
+      (loc ? '<div class="popup-time">' + esc(loc) + '</div>' : '') +
       '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
       '<video class="popup-video" data-file-id="' + p.video_file_id + '" controls preload="none" playsinline></video></div>';
   });
   html += '</div>';
-  L.marker([lat, lng], { icon: icon }).addTo(map).bindPopup(html);
+  marker.bindPopup(html);
+  markerGroup.addLayer(marker);
 }
 
 document.addEventListener('click', function(e) {
@@ -199,8 +373,6 @@ document.addEventListener('click', function(e) {
     v.play();
   }
 }, true);
-
-function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 </script>
 </body>
 </html>
