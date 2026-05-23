@@ -56,8 +56,7 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
 }
 
 
-function getColor(uid, customColor) {
-  if (customColor) return customColor;
+function getColor(uid) {
   var pal = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e67e22','#34495e','#e91e63','#00bcd4'];
   if (!userColors[uid]) userColors[uid] = pal[Math.abs(uid) % pal.length];
   return userColors[uid];
@@ -97,25 +96,14 @@ fetch('/api/pins?chat_id=' + encodeURIComponent(chatId))
   .catch(function(e) { console.error('Map error:', e); });
 
 function addMarker(lat, lng, p) {
-  var c = getColor(p.user_id, p.pin_color);
-  var icon;
-  if (p.pin_emoji) {
-    icon = L.divIcon({
-      className: '',
-      html: '<div style="width:36px;height:36px;font-size:28px;line-height:36px;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,0.3);">' + p.pin_emoji + '</div><div class="marker-label">' + esc(p.user_name.split(' ')[0]) + '</div>',
-      iconSize: [36, 36],
-      iconAnchor: [18, 36],
-      popupAnchor: [0, -36],
-    });
-  } else {
-    icon = L.divIcon({
-      className: '',
-      html: '<svg width="28" height="42" viewBox="0 0 28 42"><path d="M14 0C7 0 2 5 2 11c0 8 12 19 12 19s12-11 12-19c0-6-5-11-12-11z" fill="' + c + '" stroke="#fff" stroke-width="2"/><circle cx="14" cy="11" r="5" fill="#fff"/></svg><div class="marker-label">' + esc(p.user_name.split(' ')[0]) + '</div>',
-      iconSize: [28, 42],
-      iconAnchor: [14, 42],
-      popupAnchor: [0, -42],
-    });
-  }
+  var c = getColor(p.user_id);
+  var icon = L.divIcon({
+    className: '',
+    html: '<svg width="28" height="42" viewBox="0 0 28 42"><path d="M14 0C7 0 2 5 2 11c0 8 12 19 12 19s12-11 12-19c0-6-5-11-12-11z" fill="' + c + '" stroke="#fff" stroke-width="2"/><circle cx="14" cy="11" r="5" fill="#fff"/></svg><div class="marker-label">' + esc(p.user_name.split(' ')[0]) + '</div>',
+    iconSize: [28, 42],
+    iconAnchor: [14, 42],
+    popupAnchor: [0, -42],
+  });
   L.marker([lat, lng], { icon: icon }).addTo(map).bindPopup(
     '<div class="popup-name">' + esc(p.user_name) + '</div>' +
     '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
@@ -125,65 +113,17 @@ function addMarker(lat, lng, p) {
 
 function addGroupMarker(lat, lng, pins) {
   var allSame = pins.every(function(p) { return p.user_id === pins[0].user_id; });
-  var c, topEmoji;
-
-  if (allSame && pins[0].pin_emoji) {
-    c = getColor(pins[0].user_id, pins[0].pin_color);
-    topEmoji = pins[0].pin_emoji;
-  } else {
-    if (allSame) {
-      c = getColor(pins[0].user_id, pins[0].pin_color);
-    } else {
-      var userData = {};
-      pins.forEach(function(p) {
-        if (!userData[p.user_id]) {
-          userData[p.user_id] = { count: 0, color: getColor(p.user_id, p.pin_color) };
-        }
-        userData[p.user_id].count++;
-      });
-      var entries = Object.keys(userData).map(function(uid) { return userData[uid]; });
-      var total = pins.length;
-      var pct = 0;
-      var stops = entries.map(function(e) {
-        var seg = (e.count / total) * 100;
-        var p1 = Math.round(pct * 10) / 10;
-        pct += seg;
-        var p2 = Math.round(pct * 10) / 10;
-        return e.color + ' ' + p1 + '% ' + p2 + '%';
-      }).join(', ');
-      c = 'conic-gradient(' + stops + ')';
-    }
-    var emojiCounts = {};
-    pins.forEach(function(p) {
-      if (p.pin_emoji) emojiCounts[p.pin_emoji] = (emojiCounts[p.pin_emoji] || 0) + 1;
-    });
-    var sorted = Object.keys(emojiCounts).sort(function(a, b) { return emojiCounts[b] - emojiCounts[a]; });
-    if (sorted.length > 0) topEmoji = sorted[0];
-  }
-
-  var content;
-  if (topEmoji) {
-    var fontSize = (allSame && pins[0].pin_emoji) ? '18px' : '16px';
-    var badge = '<span style="position:absolute;bottom:-2px;right:0;color:#fff;font-size:10px;font-weight:700;text-shadow:0 0 4px rgba(0,0,0,0.8);">' + pins.length + '</span>';
-    content = '<div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:' + c + ';border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' +
-      '<span style="font-size:' + fontSize + ';">' + topEmoji + '</span>' +
-      ((allSame && pins[0].pin_emoji && pins.length === 1) ? '' : badge) +
-      '</div>';
-  } else {
-    content = '<div style="width:36px;height:36px;border-radius:50%;background:' + c + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' + pins.length + '</div>';
-  }
-
+  var c = allSame ? getColor(pins[0].user_id) : '#7f8c8d';
   var icon = L.divIcon({
     className: '',
-    html: content,
+    html: '<div style="width:36px;height:36px;border-radius:50%;background:' + c + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">' + pins.length + '</div>',
     iconSize: [36, 36],
     iconAnchor: [18, 18],
     popupAnchor: [0, -18],
   });
   var html = '<div class="popup-scroll">';
   pins.forEach(function(p) {
-    var nameColor = getColor(p.user_id, p.pin_color);
-    html += '<div class="popup-entry"><div class="popup-name" style="color:' + nameColor + ';">' + (p.pin_emoji || '●') + ' ' + esc(p.user_name) + '</div>' +
+    html += '<div class="popup-entry"><div class="popup-name" style="color:' + getColor(p.user_id) + ';">● ' + esc(p.user_name) + '</div>' +
       '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
       '<video class="popup-video" data-file-id="' + p.video_file_id + '" controls preload="none" playsinline></video></div>';
   });
