@@ -55,3 +55,6 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Deploy
+deploy.sh
