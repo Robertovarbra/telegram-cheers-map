@@ -4,32 +4,32 @@ from aiohttp import web
 from telegram import Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
+    ChatMemberHandler,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
-    ChatMemberHandler,
 )
 
-from config import TOKEN, WEB_HOST, WEB_PORT, WEB_DIR, logger
+from config import TOKEN, WEB_DIR, WEB_HOST, WEB_PORT, logger
 from database import init_db, migrate_db
 from telegram_handlers import (
-    start,
-    map_command,
+    cleanup_inactive_chats,
     color_command,
     emoji_command,
-    handle_pref_callback,
     handle_emoji_text,
-    handle_video,
     handle_location,
     handle_my_chat_member,
-    cleanup_inactive_chats,
+    handle_pref_callback,
+    handle_video,
+    map_command,
+    start,
 )
 from web_handlers import (
-    handle_pins,
-    handle_chat,
-    handle_video_proxy,
     handle_bot_info,
+    handle_chat,
+    handle_pins,
+    handle_video_proxy,
 )
 
 
@@ -42,6 +42,7 @@ async def main() -> None:
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
+
     async def index_handler(_request: web.Request) -> web.FileResponse:
         resp = web.FileResponse(WEB_DIR / "index.html")
         resp.headers["Cache-Control"] = "public, max-age=0, must-revalidate"

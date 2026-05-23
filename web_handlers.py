@@ -1,4 +1,5 @@
-from aiohttp import web, ClientSession as AiohttpClient
+from aiohttp import ClientSession as AiohttpClient
+from aiohttp import web
 
 from database import get_pins
 
