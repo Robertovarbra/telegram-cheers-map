@@ -21,7 +21,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 6. **SQLite sin WAL mode** — ✅ `PRAGMA journal_mode=WAL` agregado en `database.py:8`.
 7. **`context.user_data` sin limpieza** — ✅ `bot_reply_message_id` se limpia al inicio de `handle_video` en `telegram_handlers.py:204`.
 8. **DB connections leak en excepciones** — ✅ `database.py`: todas las funciones ahora envuelven `sqlite3.connect()` en `try/finally` garantizando `conn.close()`.
-9. **`BOT_TOKEN` en texto plano** — `.env` contiene el token en texto plano. Aunque está gitignored, cualquiera con acceso al servidor o máquina de desarrollo puede leerlo. Un backup o swap file podría exponerlo accidentalmente.
+9. **`BOT_TOKEN` en texto plano** — ✅ Se agregó advertencia si el token viene de `.env`. En producción debe ir en `EnvironmentFile` de systemd (ver sección Despliegue).
 
 ### 🟡 Importantes
 
@@ -60,26 +60,119 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 39. **`Pasar cabecera `Range`** ya implementado en el proxy de video, pero documentar que es esencial para el seeking.
 40. **Ruff integrado** — Ya configurado como dependencia dev. Ejecutar `uv run ruff check .` y `uv run ruff format .` periódicamente.
 
-## Despliegue
+## Despliegue en Raspberry Pi
+
+### 1. Prerrequisitos
+
+```bash
+# Instalar dependencias del sistema
+sudo apt update && sudo apt install -y python3 python3-venv git rclone
+
+# Clonar el repositorio
+git clone https://github.com/Robertovarbra/telegram-cheers-map.git
+cd telegram-cheers-map
+
+# Crear y activar el venv (o usar uv sync — ver deploy_example.sh)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+### 2. EnvironmentFile seguro para el token
+
+El token de Telegram no debe vivir en `.env` en producción. Se guarda en `/etc/cheers-bot/env` con permisos restringidos:
+
+```bash
+sudo mkdir -p /etc/cheers-bot
+sudo tee /etc/cheers-bot/env <<'EOF'
+BOT_TOKEN=tu_token_aqui
+WEB_PORT=8080
+EOF
+sudo chmod 600 /etc/cheers-bot/env  # solo root puede leerlo
+```
+
+### 3. Servicio systemd — cheers-bot
+
+Crear `/etc/systemd/system/cheers-bot.service`:
+
+```ini
+[Unit]
+Description=Cheers Map Bot
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/telegram-cheers-map
+EnvironmentFile=/etc/cheers-bot/env
+ExecStart=/home/pi/telegram-cheers-map/.venv/bin/python src/main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable cheers-bot   # arranque automático al bootear
+sudo systemctl start cheers-bot    # iniciar ahora
+```
+
+### 4. Servicio systemd — Cloudflare Tunnel
+
+Si usas Cloudflare Tunnel para exponer el mapa sin abrir puertos, crea `/etc/systemd/system/cloudflared-tunnel.service`:
+
+> **Nota:** Debes autenticar y configurar el tunnel con `cloudflared tunnel login` y `cloudflared tunnel create cheersmap`. La configuración queda en `~/.cloudflared/`.
+
+```ini
+[Unit]
+Description=Cloudflare Tunnel — Cheers Map
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/local/bin/cloudflared tunnel run cheersmap
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable cloudflared-tunnel    # arranque automático al bootear
+sudo systemctl start cloudflared-tunnel     # iniciar ahora
+```
+
+### 5. Verificar que ambos arrancan automáticamente
+
+```bash
+sudo systemctl is-enabled cheers-bot            # debe decir "enabled"
+sudo systemctl is-enabled cloudflared-tunnel    # debe decir "enabled"
+```
+
+En cada reinicio del Pi, ambos servicios se inician solos.
+
+### 6. Actualizar el bot (deploy)
+
+Utilizar scripts/deploy_example.sh para crear deploy_cheers_map.sh considerando la máquina local.
 
 ```bash
 # En el Raspberry Pi
-ssh pi ./deploy_cheers_map.sh
-# (el script interno hace: git pull origin main && uv sync && sudo systemctl restart cheers-bot)
+ssh pi@raspberry ./deploy_cheers_map.sh
+
+# (el script hace: git pull origin main && uv sync && sudo systemctl restart cheers-bot)
 ```
 
-## Backup a Cloudflare R2
+### 7. Backup automático a Cloudflare R2
+
+Configurar rclone una sola vez y programar el backup diario vía cron:
 
 ```bash
-# En el Raspberry Pi (una sola vez)
-sudo apt install rclone
 rclone config  # Configurar remote "r2" de tipo s3 con tus credenciales R2
 cp .env.backup.example .env.backup  # Editar con tu bucket name
 crontab -e  # Agregar: 0 6 * * * /home/robertovarbra/telegram-cheers-map/scripts/backup.sh
-```
-
-## Túnel de desarrollo
-
-```bash
-cloudflared tunnel --config ~/.cloudflared/config-dev.yml run cheersmap-dev
 ```

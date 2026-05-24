@@ -176,7 +176,9 @@ def get_pin(chat_id, message_id):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
-        c.execute("SELECT video_file_id, user_name, video_type, city, country, country_code FROM pins WHERE chat_id = ? AND message_id = ?", (chat_id, message_id))
+        c.execute(
+            "SELECT video_file_id, user_name, video_type, city, country, country_code FROM pins WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)
+        )
         row = c.fetchone()
         return row
     finally:
