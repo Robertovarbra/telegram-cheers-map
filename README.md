@@ -14,8 +14,8 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 ### 🔴 Críticas (antes de desplegar)
 
 1. **Backup automático de la DB** — ✅ Script listo (`scripts/backup.sh`). rclone configurado + cron en el Pi.
-2. **Timeout en proxy de video** — `web_handlers.py:60`: `resp.content.iter_chunked()` sin timeout. Usar `asyncio.timeout()` o `ClientTimeout`.
-3. **XSS en `topEmoji` del grupo marker** — `web/index.html:341-342`: `topEmoji` se inyecta sin `esc()`. Permite XSS si un emoji malicioso llega a la DB.
+2. **Timeout en proxy de video** — ✅ `web_handlers.py:42`: `ClientTimeout(sock_read=10)`.
+3. **XSS en `topEmoji` del grupo marker** — ✅ Todos los valores dinámicos en `web/index.html` usan `esc()`.
 4. **Caché para Nominatim (OpenStreetMap)** — `telegram_handlers.py:223-239`: cada ubicación hace una llamada HTTP sin caché. Varias ubicaciones seguidas pueden causar rate-limit.
 5. **Graceful shutdown incompleto** — `main.py:78-80`: en el `finally` solo se limpia el runner del web, falta `application.stop()`.
 6. **SQLite sin WAL mode** — No se ejecuta `PRAGMA journal_mode=WAL`. Dos escrituras concurrentes producen `database is locked`.
