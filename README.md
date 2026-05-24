@@ -13,7 +13,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 
 ### 🔴 Críticas (antes de desplegar)
 
-1. **Backup automático de la DB** — ✅ Script listo (`scripts/backup.sh`). Pendiente configurar rclone + cron en el Pi.
+1. **Backup automático de la DB** — ✅ Script listo (`scripts/backup.sh`). rclone configurado + cron en el Pi.
 2. **Timeout en proxy de video** — `web_handlers.py:60`: `resp.content.iter_chunked()` sin timeout. Usar `asyncio.timeout()` o `ClientTimeout`.
 3. **XSS en `topEmoji` del grupo marker** — `web/index.html:341-342`: `topEmoji` se inyecta sin `esc()`. Permite XSS si un emoji malicioso llega a la DB.
 4. **Caché para Nominatim (OpenStreetMap)** — `telegram_handlers.py:223-239`: cada ubicación hace una llamada HTTP sin caché. Varias ubicaciones seguidas pueden causar rate-limit.
@@ -70,7 +70,7 @@ ssh pi ./deploy_cheers_map.sh
 sudo apt install rclone
 rclone config  # Configurar remote "r2" de tipo s3 con tus credenciales R2
 cp .env.backup.example .env.backup  # Editar con tu bucket name
-crontab -e  # Agregar: 0 3 * * * /home/robertovarbra/telegram-cheers-map/scripts/backup.sh
+crontab -e  # Agregar: 0 6 * * * /home/robertovarbra/telegram-cheers-map/scripts/backup.sh
 ```
 
 ## Túnel de desarrollo
