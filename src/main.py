@@ -29,6 +29,7 @@ from web_handlers import (
     handle_bot_info,
     handle_chat,
     handle_pins,
+    handle_pins_meta,
     handle_video_proxy,
 )
 
@@ -39,6 +40,7 @@ async def main() -> None:
 
     web_app = web.Application()
     web_app.router.add_get("/api/pins", handle_pins)
+    web_app.router.add_get("/api/pins-meta", handle_pins_meta)
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_get("/api/bot-info", handle_bot_info)

@@ -26,13 +26,13 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 ### 🟡 Importantes
 
 10. **Rate limiting** — Sin protección contra spam de videos o ubicaciones. Añadir throttle por usuario.
-11. **`get_pins` sin límite** — `database.py:173`: sin `LIMIT`, un chat con 10K+ pines explota memoria y cuelga el frontend. Relacionado con #32 pero con riesgo de crash real.
+11. **`get_pins` sin límite** — ✅ `database.py:188`: `LIMIT 500` por defecto con `OFFSET` para paginación. El frontend siempre pide 500 por página.
 12. **Error de API expuesto al cliente** — `web_handlers.py:73-80`: `int(chat_id)` sin validar; el mensaje de error (ValueError, DB errors) se devuelve como JSON al cliente. Riesgo de fuga de información interna.
 13. **Streaming loop sin manejo de desconexión** — `web_handlers.py:58-62`: si el cliente se desconecta, `ConnectionResetError` en el `async for chunk` no se captura y propaga como 500.
 14. **Health check endpoint** — Falta un `/api/health` o `/ping` para monitorear el bot (esencial en Raspberry Pi).
 15. **`uv sync --frozen` en deploy** — `deploy.sh:6` debería usar `--frozen` para garantizar que se usa el lockfile exacto.
 16. **Reconexión automática** — Si Telegram falla, `updater.start_polling()` muere sin reintentar.
-17. **Mapa salta al renderizar** — `web/index.html:267`: `map.fitBounds()` se ejecuta en cada cambio de filtro, frustrando al usuario que explora el mapa. Debería solo ejecutarse en el render inicial.
+17. **Mapa salta al renderizar** — ✅ `web/index.html`: `map.fitBounds()` ya no se ejecuta cuando el usuario navega el mapa. El flag `skipBoundsFit` evita el re-centrado. Se mantiene en el render inicial y cambios de filtro sin bounds activo.
 18. **Procesar `video` normal además de `video_note`** — `telegram_handlers.py:195`: solo maneja `message.video_note`. Los videos normales se ignoran sin feedback.
 19. **Auto-deletes silencian errores** — Si el bot pierde permisos "Delete messages", los `try/except pass` ocultan el problema. Mejor loguear el error.
 20. **Validación de `BOT_TOKEN` al arrancar** — Si falta `.env`, `TOKEN = None` y la app explota con un error poco claro. Añadir `if not TOKEN: raise SystemExit(...)`.
@@ -50,7 +50,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 29. **`.env.example`** — No existe, los nuevos desarrolladores no saben qué variables necesitan. Crear uno con placeholders.
 30. **`GROUP_RADIUS` hardcodeado** — `web/index.html:99`: 10 metros fijo para agrupar pines. Podría ser configurable o dinámico según el nivel de zoom.
 31. **Caché de Nominatim persistente** — La caché en memoria se pierde al reiniciar el bot. Una caché en disco/DB la conservaría entre reinicios.
-32. **Paginación de pines** — `get_pins` devuelve todos los pines del chat sin límite. Un chat con 10K+ pines enviaría demasiados datos al frontend.
+32. **Paginación de pines** — ✅ API soporta `limit`/`offset` + filtros `user_ids`, `date_from`, `date_to`, `q` en SQL. Frontend con navegación Prev/Next (`PAGE_SIZE=500`) en `web/index.html`.
 33. **`deploy.sh` sin verificación de `git pull`** — Si hay conflictos locales, `git pull` falla y el script se detiene sin mensaje claro. Un `git diff --quiet` previo sería más robusto.
 34. **Logging estructurado** — `logging.basicConfig` plano dificulta filtrar y debuggear en producción.
 35. **Log rotation** — Los logs del bot crecen sin límite y pueden llenar la SD. Configurar `logrotate` para rotar diariamente, comprimir y eliminar logs viejos (>7 días).
