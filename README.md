@@ -19,7 +19,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 4. **Caché para Nominatim (OpenStreetMap)** — ✅ Caché LRU en memoria (max 500 entradas) + `asyncio.Lock` + `sleep(1)` entre requests en `telegram_handlers.py:226-255`.
 5. **Graceful shutdown incompleto** — ✅ `main.py:80`: `await application.stop()` agregado antes de `runner.cleanup()`.
 6. **SQLite sin WAL mode** — ✅ `PRAGMA journal_mode=WAL` agregado en `database.py:8`.
-7. **`context.user_data` sin limpieza** — `telegram_handlers.py:219`: `bot_reply_message_id` se guarda pero nunca se limpia si el usuario no manda ubicación (ocupa memoria permanentemente).
+7. **`context.user_data` sin limpieza** — ✅ `bot_reply_message_id` se limpia al inicio de `handle_video` en `telegram_handlers.py:204`.
 
 ### 🟡 Importantes
 

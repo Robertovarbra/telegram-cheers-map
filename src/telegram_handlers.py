@@ -200,6 +200,8 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = message.from_user
     user_name = user.full_name or user.username or str(user.id)
 
+    context.user_data.pop("bot_reply_message_id", None)
+
     if chat.type == Chat.SUPERGROUP:
         video_link = f"https://t.me/c/{str(chat.id)[4:]}/{message.message_id}"
     elif chat.type == Chat.GROUP:
