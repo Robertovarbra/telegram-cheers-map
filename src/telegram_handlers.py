@@ -226,6 +226,7 @@ _geocode_cache: dict[tuple[float, float], tuple[str | None, str | None, str | No
 _MAX_CACHE_SIZE = 500
 _nominatim_lock = asyncio.Lock()
 
+
 async def reverse_geocode(lat, lng):
     key = (round(lat, 3), round(lng, 3))
 

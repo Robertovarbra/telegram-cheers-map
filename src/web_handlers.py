@@ -1,5 +1,5 @@
-from aiohttp import ClientSession as AiohttpClient, ClientTimeout
-from aiohttp import web
+from aiohttp import ClientSession as AiohttpClient
+from aiohttp import ClientTimeout, web
 
 from database import get_pins
 
