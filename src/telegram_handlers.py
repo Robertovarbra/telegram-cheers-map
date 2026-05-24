@@ -220,23 +220,46 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     context.user_data["bot_reply_message_id"] = bot_reply.message_id
 
 
+_geocode_cache: dict[tuple[float, float], tuple[str | None, str | None, str | None]] = {}
+_MAX_CACHE_SIZE = 500
+_nominatim_lock = asyncio.Lock()
+
 async def reverse_geocode(lat, lng):
-    try:
-        async with ClientSession() as session:
-            url = "https://nominatim.openstreetmap.org/reverse"
-            params = {"format": "jsonv2", "lat": lat, "lon": lng}
-            headers = {"User-Agent": "TelegramCheersMap/1.0", "Accept-Language": "en"}
-            async with session.get(url, params=params, headers=headers) as resp:
-                if resp.status != 200:
-                    return None, None, None
-                data = await resp.json()
-                addr = data.get("address", {})
-                city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("municipality")
-                country = addr.get("country")
-                country_code = addr.get("country_code")
-                return city, country, country_code
-    except Exception:
-        return None, None, None
+    key = (round(lat, 3), round(lng, 3))
+
+    if key in _geocode_cache:
+        result = _geocode_cache.pop(key)
+        _geocode_cache[key] = result
+        return result
+
+    async with _nominatim_lock:
+        if key in _geocode_cache:
+            result = _geocode_cache.pop(key)
+            _geocode_cache[key] = result
+            return result
+
+        try:
+            async with ClientSession() as session:
+                url = "https://nominatim.openstreetmap.org/reverse"
+                params = {"format": "jsonv2", "lat": lat, "lon": lng}
+                headers = {"User-Agent": "TelegramCheersMap/1.0", "Accept-Language": "en"}
+                async with session.get(url, params=params, headers=headers) as resp:
+                    if resp.status != 200:
+                        return None, None, None
+                    data = await resp.json()
+                    addr = data.get("address", {})
+                    city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("municipality")
+                    country = addr.get("country")
+                    country_code = addr.get("country_code")
+                    result = (city, country, country_code)
+                    if len(_geocode_cache) >= _MAX_CACHE_SIZE:
+                        _geocode_cache.pop(next(iter(_geocode_cache)))
+                    _geocode_cache[key] = result
+                    return result
+        except Exception:
+            return None, None, None
+        finally:
+            await asyncio.sleep(1)
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

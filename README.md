@@ -16,7 +16,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 1. **Backup automático de la DB** — ✅ Script listo (`scripts/backup.sh`). rclone configurado + cron en el Pi.
 2. **Timeout en proxy de video** — ✅ `web_handlers.py:42`: `ClientTimeout(sock_read=10)`.
 3. **XSS en `topEmoji` del grupo marker** — ✅ Todos los valores dinámicos en `web/index.html` usan `esc()`.
-4. **Caché para Nominatim (OpenStreetMap)** — `telegram_handlers.py:223-239`: cada ubicación hace una llamada HTTP sin caché. Varias ubicaciones seguidas pueden causar rate-limit.
+4. **Caché para Nominatim (OpenStreetMap)** — ✅ Caché LRU en memoria (max 500 entradas) + `asyncio.Lock` + `sleep(1)` entre requests en `telegram_handlers.py:226-255`.
 5. **Graceful shutdown incompleto** — `main.py:78-80`: en el `finally` solo se limpia el runner del web, falta `application.stop()`.
 6. **SQLite sin WAL mode** — No se ejecuta `PRAGMA journal_mode=WAL`. Dos escrituras concurrentes producen `database is locked`.
 7. **`context.user_data` sin limpieza** — `telegram_handlers.py:219`: `bot_reply_message_id` se guarda pero nunca se limpia si el usuario no manda ubicación (ocupa memoria permanentemente).
@@ -33,7 +33,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 15. **Validación de `BOT_TOKEN` al arrancar** — Si falta `.env`, `TOKEN = None` y la app explota con un error poco claro. Añadir `if not TOKEN: raise SystemExit(...)`.
 16. **`handle_emoji_text` acepta cualquier texto ≤10 caracteres** — No valida que sea un emoji real. Cualquier texto se guarda como "emoji".
 17. **Eliminar pin propio** — Los usuarios no pueden borrar sus cheers. Un comando `/delete` o un botón en el popup del mapa lo resolvería.
-18. **Nominatim rate limit** — Si dos usuarios mandan ubicación a la vez, la segunda llamada puede fallar. Un `asyncio.sleep(1)` o una cola lo soluciona.
+18. **Nominatim rate limit** — ✅ Resuelto por el lock + sleep(1) en `reverse_geocode` (recomendación #4).
 19. **Indicador de carga en el mapa** — Al cambiar filtros no hay feedback visual. Un spinner o "Loading..." mínimo ayudaría.
 20. **Network watchdog** — Script que verifique conectividad (ping al gateway) cada minuto y reinicie la interfaz de red si no hay respuesta. Evita quedar inaccesible como ocurrió con el WiFi.
 21. **Watchdog hardware** — Configurar `/dev/watchdog` del Pi para que el sistema se reinicie automáticamente si se cuelga por completo (kernel panic, out-of-memory, etc.).
