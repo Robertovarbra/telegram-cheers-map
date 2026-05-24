@@ -77,6 +77,7 @@ async def main() -> None:
 
             await asyncio.Event().wait()
     finally:
+        await application.stop()
         await runner.cleanup()
 
 
