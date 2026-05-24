@@ -3,6 +3,11 @@
 .env.*
 .env.local
 .env.*.local
+!.env.backup.example
+!.env.example
+
+# Backups
+backups/
 
 # Virtual environment
 .venv/
