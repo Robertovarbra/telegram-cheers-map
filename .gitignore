@@ -3,6 +3,11 @@
 .env.*
 .env.local
 .env.*.local
+!.env.backup.example
+!.env.example
+
+# Backups
+backups/
 
 # Virtual environment
 .venv/
@@ -55,6 +60,3 @@ Thumbs.db
 # Logs
 logs/
 *.log
-
-# Deploy
-deploy.sh
