@@ -18,7 +18,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 3. **XSS en `topEmoji` del grupo marker** — ✅ Todos los valores dinámicos en `web/index.html` usan `esc()`.
 4. **Caché para Nominatim (OpenStreetMap)** — ✅ Caché LRU en memoria (max 500 entradas) + `asyncio.Lock` + `sleep(1)` entre requests en `telegram_handlers.py:226-255`.
 5. **Graceful shutdown incompleto** — ✅ `main.py:80`: `await application.stop()` agregado antes de `runner.cleanup()`.
-6. **SQLite sin WAL mode** — No se ejecuta `PRAGMA journal_mode=WAL`. Dos escrituras concurrentes producen `database is locked`.
+6. **SQLite sin WAL mode** — ✅ `PRAGMA journal_mode=WAL` agregado en `database.py:8`.
 7. **`context.user_data` sin limpieza** — `telegram_handlers.py:219`: `bot_reply_message_id` se guarda pero nunca se limpia si el usuario no manda ubicación (ocupa memoria permanentemente).
 
 ### 🟡 Importantes

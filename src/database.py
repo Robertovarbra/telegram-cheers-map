@@ -6,6 +6,7 @@ from config import DB_PATH
 
 def init_db():
     conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS pins (
