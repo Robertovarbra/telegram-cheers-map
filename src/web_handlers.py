@@ -1,4 +1,4 @@
-from aiohttp import ClientSession as AiohttpClient
+from aiohttp import ClientSession as AiohttpClient, ClientTimeout
 from aiohttp import web
 
 from database import get_pins
@@ -39,7 +39,7 @@ async def handle_video_proxy(request: web.Request) -> web.StreamResponse:
         if range_header:
             req_headers["Range"] = range_header
 
-        async with session.get(file.file_path, headers=req_headers) as resp:
+        async with session.get(file.file_path, headers=req_headers, timeout=ClientTimeout(sock_read=10)) as resp:
             if resp.status == 404:
                 raise web.HTTPNotFound(text="file not found on Telegram")
             if resp.status not in (200, 206):
