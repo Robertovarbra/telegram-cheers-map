@@ -8,6 +8,8 @@ async def handle_chat(request: web.Request) -> web.Response:
     chat_id = request.rel_url.query.get("chat_id")
     if not chat_id:
         return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
     bot = request.app.get("bot")
     if not bot:
         return web.json_response({"username": None})
@@ -73,6 +75,8 @@ async def handle_pins(request: web.Request) -> web.Response:
     chat_id = request.rel_url.query.get("chat_id")
     if not chat_id:
         return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
     try:
         limit = int(request.rel_url.query.get("limit", 500))
         offset = int(request.rel_url.query.get("offset", 0))
@@ -85,16 +89,18 @@ async def handle_pins(request: web.Request) -> web.Response:
         q = request.rel_url.query.get("q")
         result = get_pins(int(chat_id), limit=limit, offset=offset, user_ids=user_ids, date_from=date_from, date_to=date_to, q=q)
         return web.json_response(result)
-    except (ValueError, Exception) as e:
-        return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        return web.json_response({"error": "internal error"}, status=400)
 
 
 async def handle_pins_meta(request: web.Request) -> web.Response:
     chat_id = request.rel_url.query.get("chat_id")
     if not chat_id:
         return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
     try:
         result = get_pins_meta(int(chat_id))
         return web.json_response(result)
-    except (ValueError, Exception) as e:
-        return web.json_response({"error": str(e)}, status=400)
+    except Exception:
+        return web.json_response({"error": "internal error"}, status=400)

@@ -27,7 +27,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 
 10. **Rate limiting** — Sin protección contra spam de videos o ubicaciones. Añadir throttle por usuario.
 11. **`get_pins` sin límite** — ✅ `database.py:188`: `LIMIT 500` por defecto con `OFFSET` para paginación. El frontend siempre pide 500 por página.
-12. **Error de API expuesto al cliente** — `web_handlers.py:73-80`: `int(chat_id)` sin validar; el mensaje de error (ValueError, DB errors) se devuelve como JSON al cliente. Riesgo de fuga de información interna.
+12. **Error de API expuesto al cliente** — ✅ `web_handlers.py:74-79`: `chat_id.lstrip("-").isdigit()` antes de `int()`; errores internos devuelven `"internal error"` genérico.
 13. **Streaming loop sin manejo de desconexión** — `web_handlers.py:58-62`: si el cliente se desconecta, `ConnectionResetError` en el `async for chunk` no se captura y propaga como 500.
 14. **Health check endpoint** — Falta un `/api/health` o `/ping` para monitorear el bot (esencial en Raspberry Pi).
 15. **`uv sync --frozen` en deploy** — `deploy.sh:6` debería usar `--frozen` para garantizar que se usa el lockfile exacto.
