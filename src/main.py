@@ -37,21 +37,24 @@ from web_handlers import (
 )
 
 
-async def _watchdog_loop() -> None:
+def _systemd_notify(msg: bytes) -> None:
     sock_path = os.environ.get("NOTIFY_SOCKET")
     if not sock_path:
         return
-    logger.info("systemd watchdog enabled")
     if sock_path.startswith("@"):
         sock_path = "\0" + sock_path[1:]
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    sock.connect(sock_path)
     try:
-        while True:
-            sock.sendall(b"WATCHDOG=1")
-            await asyncio.sleep(15)
+        sock.connect(sock_path)
+        sock.sendall(msg)
     finally:
         sock.close()
+
+
+async def _watchdog_loop() -> None:
+    while True:
+        _systemd_notify(b"WATCHDOG=1")
+        await asyncio.sleep(15)
 
 
 async def main() -> None:
@@ -98,6 +101,8 @@ async def main() -> None:
             await site.start()
             logger.info("Bot + web server ready at http://%s:%s", WEB_HOST, WEB_PORT)
 
+            _systemd_notify(b"READY=1")
+            logger.info("systemd watchdog enabled")
             asyncio.create_task(_watchdog_loop())
 
             await asyncio.Event().wait()
