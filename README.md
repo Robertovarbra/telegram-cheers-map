@@ -39,7 +39,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 21. **`handle_emoji_text` acepta cualquier texto ≤10 caracteres** — No valida que sea un emoji real. Cualquier texto se guarda como "emoji".
 22. **Eliminar pin propio** — Los usuarios no pueden borrar sus cheers. Un comando `/delete` o un botón en el popup del mapa lo resolvería.
 23. **Nominatim rate limit** — ✅ Resuelto por el lock + sleep(1) en `reverse_geocode` (recomendación #4).
-24. **Indicador de carga en el mapa** — Al cambiar filtros no hay feedback visual. Un spinner o "Loading..." mínimo ayudaría.
+24. **Indicador de carga en el mapa** — ✅ `web/index.html:270`: spinner CSS animado + "Loading..." mientras se cargan filtros server-side.
 25. **Network watchdog** — Script que verifique conectividad (ping al gateway) cada minuto y reinicie la interfaz de red si no hay respuesta. Evita quedar inaccesible como ocurrió con el WiFi.
 26. **Watchdog hardware** — Configurar `/dev/watchdog` del Pi para que el sistema se reinicie automáticamente si se cuelga por completo (kernel panic, out-of-memory, etc.).
 

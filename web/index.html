@@ -54,6 +54,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .filter-action.all { color: #3498db; }
 .filter-action.none { color: #888; }
 .filter-input { width: 100%; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; padding: 3px 5px; margin-bottom: 2px; }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #888; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 4px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -266,6 +268,7 @@ function loadPins(page, filterParams) {
     if (filterParams.date_to) url += '&date_to=' + encodeURIComponent(filterParams.date_to);
     if (filterParams.q) url += '&q=' + encodeURIComponent(filterParams.q);
   }
+  document.getElementById('filter-count').innerHTML = '<span class="spinner"></span> Loading...';
   fetch(url)
     .then(function(r) { if (!r.ok) throw new Error('Failed ' + r.status); return r.json(); })
     .then(function(data) {
