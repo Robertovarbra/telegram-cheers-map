@@ -1,7 +1,7 @@
 from aiohttp import ClientSession as AiohttpClient
 from aiohttp import ClientTimeout, web
 
-from database import get_pins
+from database import get_pins, get_pins_meta
 
 
 async def handle_chat(request: web.Request) -> web.Response:
@@ -74,7 +74,27 @@ async def handle_pins(request: web.Request) -> web.Response:
     if not chat_id:
         return web.json_response({"error": "chat_id required"}, status=400)
     try:
-        pins = get_pins(int(chat_id))
-        return web.json_response(pins)
+        limit = int(request.rel_url.query.get("limit", 500))
+        offset = int(request.rel_url.query.get("offset", 0))
+        limit = max(limit, 1)
+        offset = max(offset, 0)
+        user_ids_raw = request.rel_url.query.get("user_ids")
+        user_ids = user_ids_raw.split(",") if user_ids_raw else None
+        date_from = request.rel_url.query.get("date_from")
+        date_to = request.rel_url.query.get("date_to")
+        q = request.rel_url.query.get("q")
+        result = get_pins(int(chat_id), limit=limit, offset=offset, user_ids=user_ids, date_from=date_from, date_to=date_to, q=q)
+        return web.json_response(result)
+    except (ValueError, Exception) as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_pins_meta(request: web.Request) -> web.Response:
+    chat_id = request.rel_url.query.get("chat_id")
+    if not chat_id:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    try:
+        result = get_pins_meta(int(chat_id))
+        return web.json_response(result)
     except (ValueError, Exception) as e:
         return web.json_response({"error": str(e)}, status=400)

@@ -185,39 +185,62 @@ def get_pin(chat_id, message_id):
         conn.close()
 
 
-def get_pins(chat_id):
+def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_to=None, q=None):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
+        where = "WHERE p.chat_id = ?"
+        params = [chat_id]
+        if user_ids:
+            placeholders = ",".join("?" * len(user_ids))
+            where += " AND p.user_id IN (" + placeholders + ")"
+            params.extend(user_ids)
+        if date_from:
+            where += " AND p.created_at >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND p.created_at <= ?"
+            params.append(date_to + "T23:59:59")
+        if q:
+            where += " AND (INSTR(LOWER(p.city), LOWER(?)) > 0 OR INSTR(LOWER(p.country), LOWER(?)) > 0 OR INSTR(LOWER(p.country_code), LOWER(?)) > 0)"
+            params.extend([q, q, q])
+        c.execute("SELECT COUNT(*) FROM pins p " + where, params)
+        total = c.fetchone()[0]
         c.execute(
             "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id,"
             " p.latitude, p.longitude, p.created_at, p.video_link,"
             " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''),"
             " p.city, p.country, p.country_code"
             " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
-            " WHERE p.chat_id = ? ORDER BY p.created_at",
-            (chat_id,),
+            " " + where + " ORDER BY p.created_at DESC"
+            " LIMIT ? OFFSET ?",
+            params + [limit, offset],
         )
         rows = c.fetchall()
-        return [
-            {
-                "id": r[0],
-                "message_id": r[1],
-                "user_id": r[2],
-                "user_name": r[3],
-                "video_file_id": r[4],
-                "latitude": r[5],
-                "longitude": r[6],
-                "created_at": r[7],
-                "video_link": r[8],
-                "pin_color": r[9] or None,
-                "pin_emoji": r[10] or None,
-                "city": r[11],
-                "country": r[12],
-                "country_code": r[13],
-            }
-            for r in rows
-        ]
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "pins": [
+                {
+                    "id": r[0],
+                    "message_id": r[1],
+                    "user_id": r[2],
+                    "user_name": r[3],
+                    "video_file_id": r[4],
+                    "latitude": r[5],
+                    "longitude": r[6],
+                    "created_at": r[7],
+                    "video_link": r[8],
+                    "pin_color": r[9] or None,
+                    "pin_emoji": r[10] or None,
+                    "city": r[11],
+                    "country": r[12],
+                    "country_code": r[13],
+                }
+                for r in rows
+            ],
+        }
     finally:
         conn.close()
 
@@ -246,5 +269,23 @@ def get_all_chat_ids():
         c.execute("SELECT DISTINCT chat_id FROM pins")
         rows = c.fetchall()
         return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
+def get_pins_meta(chat_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT DISTINCT p.user_id, p.user_name, COALESCE(up.pin_emoji, ''), COALESCE(up.pin_color, '')"
+            " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+            " WHERE p.chat_id = ? ORDER BY p.user_name",
+            (chat_id,),
+        )
+        users = [{"user_id": r[0], "user_name": r[1], "pin_emoji": r[2] or None, "pin_color": r[3] or None} for r in c.fetchall()]
+        c.execute("SELECT MIN(created_at), MAX(created_at) FROM pins WHERE chat_id = ?", (chat_id,))
+        row = c.fetchone()
+        return {"users": users, "min_date": row[0], "max_date": row[1]}
     finally:
         conn.close()
