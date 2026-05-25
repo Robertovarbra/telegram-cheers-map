@@ -41,6 +41,7 @@ async def _watchdog_loop() -> None:
     sock_path = os.environ.get("NOTIFY_SOCKET")
     if not sock_path:
         return
+    logger.info("systemd watchdog enabled")
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     sock.connect(sock_path)
     try:
@@ -95,9 +96,7 @@ async def main() -> None:
             await site.start()
             logger.info("Bot + web server ready at http://%s:%s", WEB_HOST, WEB_PORT)
 
-            if os.environ.get("NOTIFY_SOCKET"):
-                asyncio.create_task(_watchdog_loop())
-                logger.info("systemd watchdog enabled")
+            asyncio.create_task(_watchdog_loop())
 
             await asyncio.Event().wait()
     finally:
