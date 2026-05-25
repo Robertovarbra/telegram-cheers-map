@@ -1,4 +1,6 @@
 import asyncio
+import os
+import socket
 
 from aiohttp import web
 from telegram import Update
@@ -28,10 +30,25 @@ from telegram_handlers import (
 from web_handlers import (
     handle_bot_info,
     handle_chat,
+    handle_health,
     handle_pins,
     handle_pins_meta,
     handle_video_proxy,
 )
+
+
+async def _watchdog_loop() -> None:
+    sock_path = os.environ.get("NOTIFY_SOCKET")
+    if not sock_path:
+        return
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    sock.connect(sock_path)
+    try:
+        while True:
+            sock.sendall(b"WATCHDOG=1")
+            await asyncio.sleep(15)
+    finally:
+        sock.close()
 
 
 async def main() -> None:
@@ -39,6 +56,7 @@ async def main() -> None:
     migrate_db()
 
     web_app = web.Application()
+    web_app.router.add_get("/api/health", handle_health)
     web_app.router.add_get("/api/pins", handle_pins)
     web_app.router.add_get("/api/pins-meta", handle_pins_meta)
     web_app.router.add_get("/api/chat", handle_chat)
@@ -76,6 +94,10 @@ async def main() -> None:
             site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
             await site.start()
             logger.info("Bot + web server ready at http://%s:%s", WEB_HOST, WEB_PORT)
+
+            if os.environ.get("NOTIFY_SOCKET"):
+                asyncio.create_task(_watchdog_loop())
+                logger.info("systemd watchdog enabled")
 
             await asyncio.Event().wait()
     finally:

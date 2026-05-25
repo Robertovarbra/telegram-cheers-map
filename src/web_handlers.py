@@ -98,6 +98,10 @@ async def handle_pins(request: web.Request) -> web.Response:
         return web.json_response({"error": "internal error"}, status=400)
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    return web.json_response({"status": "ok"})
+
+
 async def handle_pins_meta(request: web.Request) -> web.Response:
     chat_id = request.rel_url.query.get("chat_id")
     if not chat_id:

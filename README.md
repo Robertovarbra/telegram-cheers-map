@@ -29,7 +29,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 11. **`get_pins` sin límite** — ✅ `database.py:188`: `LIMIT 500` por defecto con `OFFSET` para paginación. El frontend siempre pide 500 por página.
 12. **Error de API expuesto al cliente** — ✅ `web_handlers.py:74-79`: `chat_id.lstrip("-").isdigit()` antes de `int()`; errores internos devuelven `"internal error"` genérico.
 13. **Streaming loop sin manejo de desconexión** — ✅ `web_handlers.py:62-65`: `ConnectionResetError` y `asyncio.CancelledError` capturados con `try/except pass` para cierre graceful.
-14. **Health check endpoint** — Falta un `/api/health` o `/ping` para monitorear el bot (esencial en Raspberry Pi).
+14. **Health check endpoint** — ✅ `GET /api/health` + watchdog systemd (`Type=notify`, `WatchdogSec=30`) en `main.py:40-42,88-89`. Documentado en sección 8 del README.
 15. **`uv sync --frozen` en deploy** — `deploy.sh:6` debería usar `--frozen` para garantizar que se usa el lockfile exacto.
 16. **Reconexión automática** — Si Telegram falla, `updater.start_polling()` muere sin reintentar.
 17. **Mapa salta al renderizar** — ✅ `web/index.html`: `map.fitBounds()` ya no se ejecuta cuando el usuario navega el mapa. El flag `skipBoundsFit` evita el re-centrado. Se mantiene en el render inicial y cambios de filtro sin bounds activo.
@@ -101,7 +101,8 @@ Description=Cheers Map Bot
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+WatchdogSec=30
 User=pi
 WorkingDirectory=/home/pi/telegram-cheers-map
 EnvironmentFile=/etc/cheers-bot/env
@@ -176,3 +177,47 @@ rclone config  # Configurar remote "r2" de tipo s3 con tus credenciales R2
 cp .env.backup.example .env.backup  # Editar con tu bucket name
 crontab -e  # Agregar: 0 6 * * * /home/robertovarbra/telegram-cheers-map/scripts/backup.sh
 ```
+
+### 8. Monitoreo (watchdog + health check)
+
+El bot incluye dos capas de defensa:
+
+1. **Watchdog de systemd** — el bot envía un latido cada 15s; si deja de hacerlo por 30s, systemd mata y reinicia el proceso automáticamente.
+2. **Health check HTTP** — endpoint `GET /api/health` que verifica que la API responde. Un cron local puede reiniciar el servicio si falla.
+
+#### 8.1 Activar el watchdog
+
+El archivo de servicio ya incluye `Type=notify` y `WatchdogSec=30` (ver sección 3). Solo asegurate de instalar la dependencia:
+
+```bash
+source .venv/bin/activate
+uv sync  # ya incluye systemd-python como dependencia
+```
+
+Verificar que funciona:
+
+```bash
+sudo journalctl -u cheers-bot | grep watchdog
+# Debería mostrar: "systemd watchdog enabled"
+```
+
+#### 8.2 Health check + reinicio automático (cron)
+
+Agregar al crontab del usuario `pi`:
+
+```bash
+crontab -e
+```
+
+Y pegar:
+
+```bash
+* * * * * curl -sf http://localhost:8080/api/health || sudo systemctl restart cheers-bot
+```
+
+Esto verifica cada minuto que el endpoint responda. Si falla (proceso vivo pero DB corrupta, SD llena, etc.), reinicia el servicio.
+
+> **Nota:** Para que `sudo systemctl` funcione sin contraseña desde cron, agregá en `/etc/sudoers.d/cheers-bot`:
+> ```
+> pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart cheers-bot
+> ```
