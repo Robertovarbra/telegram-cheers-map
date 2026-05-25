@@ -13,7 +13,10 @@ _token_from_env = os.environ.get("BOT_TOKEN")
 load_dotenv(BASE_DIR / ".env")
 TOKEN = os.getenv("BOT_TOKEN")
 
-if TOKEN and not _token_from_env:
+if not TOKEN:
+    raise SystemExit("ERROR: BOT_TOKEN not found. Set BOT_TOKEN in .env or as an environment variable.")
+
+if not _token_from_env:
     logger.warning("BOT_TOKEN loaded from .env file. For production, set it via systemd EnvironmentFile or a secure env manager.")
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", 8080))

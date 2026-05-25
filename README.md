@@ -27,19 +27,19 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 
 10. **Rate limiting** — Sin protección contra spam de videos o ubicaciones. Añadir throttle por usuario.
 11. **`get_pins` sin límite** — ✅ `database.py:188`: `LIMIT 500` por defecto con `OFFSET` para paginación. El frontend siempre pide 500 por página.
-12. **Error de API expuesto al cliente** — `web_handlers.py:73-80`: `int(chat_id)` sin validar; el mensaje de error (ValueError, DB errors) se devuelve como JSON al cliente. Riesgo de fuga de información interna.
-13. **Streaming loop sin manejo de desconexión** — `web_handlers.py:58-62`: si el cliente se desconecta, `ConnectionResetError` en el `async for chunk` no se captura y propaga como 500.
-14. **Health check endpoint** — Falta un `/api/health` o `/ping` para monitorear el bot (esencial en Raspberry Pi).
+12. **Error de API expuesto al cliente** — ✅ `web_handlers.py:74-79`: `chat_id.lstrip("-").isdigit()` antes de `int()`; errores internos devuelven `"internal error"` genérico.
+13. **Streaming loop sin manejo de desconexión** — ✅ `web_handlers.py:62-65`: `ConnectionResetError` y `asyncio.CancelledError` capturados con `try/except pass` para cierre graceful.
+14. **Health check endpoint** — ✅ `GET /api/health` + watchdog systemd (`Type=notify`, `WatchdogSec=30`) en `main.py:40-44,97`. Documentado en sección 8 del README.
 15. **`uv sync --frozen` en deploy** — `deploy.sh:6` debería usar `--frozen` para garantizar que se usa el lockfile exacto.
 16. **Reconexión automática** — Si Telegram falla, `updater.start_polling()` muere sin reintentar.
 17. **Mapa salta al renderizar** — ✅ `web/index.html`: `map.fitBounds()` ya no se ejecuta cuando el usuario navega el mapa. El flag `skipBoundsFit` evita el re-centrado. Se mantiene en el render inicial y cambios de filtro sin bounds activo.
 18. **Procesar `video` normal además de `video_note`** — `telegram_handlers.py:195`: solo maneja `message.video_note`. Los videos normales se ignoran sin feedback.
 19. **Auto-deletes silencian errores** — Si el bot pierde permisos "Delete messages", los `try/except pass` ocultan el problema. Mejor loguear el error.
-20. **Validación de `BOT_TOKEN` al arrancar** — Si falta `.env`, `TOKEN = None` y la app explota con un error poco claro. Añadir `if not TOKEN: raise SystemExit(...)`.
+20. **Validación de `BOT_TOKEN` al arrancar** — ✅ `config.py:14`: `if not TOKEN: raise SystemExit(...)` con mensaje claro.
 21. **`handle_emoji_text` acepta cualquier texto ≤10 caracteres** — No valida que sea un emoji real. Cualquier texto se guarda como "emoji".
 22. **Eliminar pin propio** — Los usuarios no pueden borrar sus cheers. Un comando `/delete` o un botón en el popup del mapa lo resolvería.
 23. **Nominatim rate limit** — ✅ Resuelto por el lock + sleep(1) en `reverse_geocode` (recomendación #4).
-24. **Indicador de carga en el mapa** — Al cambiar filtros no hay feedback visual. Un spinner o "Loading..." mínimo ayudaría.
+24. **Indicador de carga en el mapa** — ✅ `web/index.html:270`: spinner CSS animado + "Loading..." mientras se cargan filtros server-side.
 25. **Network watchdog** — Script que verifique conectividad (ping al gateway) cada minuto y reinicie la interfaz de red si no hay respuesta. Evita quedar inaccesible como ocurrió con el WiFi.
 26. **Watchdog hardware** — Configurar `/dev/watchdog` del Pi para que el sistema se reinicie automáticamente si se cuelga por completo (kernel panic, out-of-memory, etc.).
 
@@ -101,7 +101,8 @@ Description=Cheers Map Bot
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+WatchdogSec=30
 User=pi
 WorkingDirectory=/home/pi/telegram-cheers-map
 EnvironmentFile=/etc/cheers-bot/env
@@ -176,3 +177,31 @@ rclone config  # Configurar remote "r2" de tipo s3 con tus credenciales R2
 cp .env.backup.example .env.backup  # Editar con tu bucket name
 crontab -e  # Agregar: 0 6 * * * /home/robertovarbra/telegram-cheers-map/scripts/backup.sh
 ```
+
+### 8. Monitoreo (watchdog + health check)
+
+El bot incluye dos capas de defensa:
+
+1. **Watchdog de systemd** — el bot envía un latido cada 15s via `$NOTIFY_SOCKET`; si deja de hacerlo por 30s, systemd mata y reinicia el proceso automáticamente. Se activa con `Type=notify` y `WatchdogSec=30` en el servicio (sección 3). No requiere dependencias extra.
+2. **Health check HTTP** — endpoint `GET /api/health` que verifica que la API responde. Un cron local puede reiniciar el servicio si falla.
+
+#### Health check + reinicio automático (cron)
+
+Agregar al crontab del usuario `pi`:
+
+```bash
+crontab -e
+```
+
+Y pegar:
+
+```bash
+* * * * * curl -sf http://localhost:8080/api/health || sudo systemctl restart cheers-bot
+```
+
+Esto verifica cada minuto que el endpoint responda. Si falla (proceso vivo pero DB corrupta, SD llena, etc.), reinicia el servicio.
+
+> **Nota:** Para que `sudo systemctl` funcione sin contraseña desde cron, agregá en `/etc/sudoers.d/cheers-bot`:
+> ```
+> pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart cheers-bot
+> ```
