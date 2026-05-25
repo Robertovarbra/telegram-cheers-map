@@ -182,26 +182,10 @@ crontab -e  # Agregar: 0 6 * * * /home/robertovarbra/telegram-cheers-map/scripts
 
 El bot incluye dos capas de defensa:
 
-1. **Watchdog de systemd** — el bot envía un latido cada 15s; si deja de hacerlo por 30s, systemd mata y reinicia el proceso automáticamente.
+1. **Watchdog de systemd** — el bot envía un latido cada 15s via `$NOTIFY_SOCKET`; si deja de hacerlo por 30s, systemd mata y reinicia el proceso automáticamente. Se activa con `Type=notify` y `WatchdogSec=30` en el servicio (sección 3). No requiere dependencias extra.
 2. **Health check HTTP** — endpoint `GET /api/health` que verifica que la API responde. Un cron local puede reiniciar el servicio si falla.
 
-#### 8.1 Activar el watchdog
-
-El archivo de servicio ya incluye `Type=notify` y `WatchdogSec=30` (ver sección 3). Solo asegurate de instalar la dependencia:
-
-```bash
-source .venv/bin/activate
-uv sync
-```
-
-Verificar que funciona:
-
-```bash
-sudo journalctl -u cheers-bot | grep watchdog
-# Debería mostrar: "systemd watchdog enabled"
-```
-
-#### 8.2 Health check + reinicio automático (cron)
+#### Health check + reinicio automático (cron)
 
 Agregar al crontab del usuario `pi`:
 
