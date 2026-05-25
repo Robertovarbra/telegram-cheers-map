@@ -42,6 +42,8 @@ async def _watchdog_loop() -> None:
     if not sock_path:
         return
     logger.info("systemd watchdog enabled")
+    if sock_path.startswith("@"):
+        sock_path = "\0" + sock_path[1:]
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     sock.connect(sock_path)
     try:
