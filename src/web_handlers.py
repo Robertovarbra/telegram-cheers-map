@@ -1,3 +1,5 @@
+import asyncio
+
 from aiohttp import ClientSession as AiohttpClient
 from aiohttp import ClientTimeout, web
 
@@ -59,8 +61,11 @@ async def handle_video_proxy(request: web.Request) -> web.StreamResponse:
 
             stream = web.StreamResponse(status=resp.status, headers=headers)
             await stream.prepare(request)
-            async for chunk in resp.content.iter_chunked(65536):
-                await stream.write(chunk)
+            try:
+                async for chunk in resp.content.iter_chunked(65536):
+                    await stream.write(chunk)
+            except (ConnectionResetError, asyncio.CancelledError):
+                pass
             return stream
 
 
