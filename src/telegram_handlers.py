@@ -5,7 +5,7 @@ from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarku
 from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
-from config import WEB_URL, logger
+from config import BOT_USERNAME, WEB_URL, logger
 from database import add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, get_pin, set_chat_setting, set_user_pref
 
 
@@ -52,7 +52,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    map_url = f"{WEB_URL}/?chat_id={chat_id}&v=1"
+    map_url = f"https://t.me/{BOT_USERNAME}/map?startapp=c{chat_id}"
     keyboard = [[InlineKeyboardButton("Open Map", url=map_url)]]
 
     pinned_msg_id = get_chat_setting(chat_id, "pinned_map_msg_id")

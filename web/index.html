@@ -87,8 +87,24 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   </div>
 </div>
 <script>
+if (window.Telegram && window.Telegram.WebApp) {
+  window.Telegram.WebApp.expand();
+  window.Telegram.WebApp.ready();
+}
+
+function extractChatIdFromStartParam(sp) {
+  if (!sp || !sp.startsWith('c')) return null;
+  var rest = sp.slice(1);
+  var sep = rest.indexOf('_');
+  return sep > 0 ? rest.slice(0, sep) : rest;
+}
+
 const params = new URLSearchParams(window.location.search);
-const chatId = params.get('chat_id');
+var chatId = params.get('chat_id');
+if (!chatId) chatId = extractChatIdFromStartParam(params.get('tgWebAppStartParam'));
+if (!chatId && window.Telegram && window.Telegram.WebApp) {
+  chatId = extractChatIdFromStartParam(window.Telegram.WebApp.initDataUnsafe.start_param);
+}
 if (!chatId) {
   document.body.innerHTML = '<div style="padding:20px;text-align:center;color:#999">Missing chat ID</div>';
   throw new Error('chat_id required');
