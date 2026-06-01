@@ -21,6 +21,9 @@ if not _token_from_env:
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", 8080))
 WEB_URL = os.getenv("WEB_URL", f"https://localhost:{WEB_PORT}")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "")
+if not BOT_USERNAME:
+    logger.warning("BOT_USERNAME not set. Mini App deep links will be broken. Set it in .env or environment.")
 
 DB_PATH = BASE_DIR / "videos.db"
 WEB_DIR = BASE_DIR / "web"
