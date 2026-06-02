@@ -25,5 +25,8 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 if not BOT_USERNAME:
     logger.warning("BOT_USERNAME not set. Mini App deep links will be broken. Set it in .env or environment.")
 
+# Max age (seconds) of a Telegram Mini App initData auth_date before the API rejects it.
+INITDATA_MAX_AGE = int(os.getenv("INITDATA_MAX_AGE_HOURS", "24")) * 3600
+
 DB_PATH = BASE_DIR / "videos.db"
 WEB_DIR = BASE_DIR / "web"

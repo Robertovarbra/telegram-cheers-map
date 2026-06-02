@@ -273,6 +273,17 @@ def get_all_chat_ids():
         conn.close()
 
 
+def get_chat_ids_for_file(video_file_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT chat_id FROM pins WHERE video_file_id = ?", (video_file_id,))
+        rows = c.fetchall()
+        return [r[0] for r in rows]
+    finally:
+        conn.close()
+
+
 def get_pins_meta(chat_id):
     conn = sqlite3.connect(str(DB_PATH))
     try:

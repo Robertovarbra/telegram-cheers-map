@@ -92,6 +92,22 @@ if (window.Telegram && window.Telegram.WebApp) {
   window.Telegram.WebApp.ready();
 }
 
+// Signed Mini App initData — proves to the API that the caller is a member of the chat.
+var INIT_DATA = (window.Telegram && window.Telegram.WebApp) ? (window.Telegram.WebApp.initData || '') : '';
+function authHeaders() { return { 'Authorization': 'tma ' + INIT_DATA }; }
+// <video> tags can't send headers, so the video endpoint takes initData as a query param.
+function videoUrl(fileId) { return '/api/video?file_id=' + encodeURIComponent(fileId) + '&auth=' + encodeURIComponent(INIT_DATA); }
+
+function showAuthError() {
+  document.getElementById('filter-count').textContent = '';
+  if (document.getElementById('auth-error')) return;
+  var d = document.createElement('div');
+  d.id = 'auth-error';
+  d.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2000;background:#fff;padding:16px 20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.25);font-family:-apple-system,sans-serif;font-size:14px;color:#444;max-width:80%;text-align:center;';
+  d.textContent = 'Open this map from inside your Telegram group to view it.';
+  document.body.appendChild(d);
+}
+
 function extractChatIdFromStartParam(sp) {
   if (!sp || !sp.startsWith('c')) return null;
   var rest = sp.slice(1);
@@ -145,7 +161,7 @@ function getColor(uid, customColor) {
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId))
+fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId), { headers: authHeaders() })
   .then(function(r) {
     if (!r.ok) return { users: [], min_date: null, max_date: null };
     return r.json();
@@ -285,8 +301,12 @@ function loadPins(page, filterParams) {
     if (filterParams.q) url += '&q=' + encodeURIComponent(filterParams.q);
   }
   document.getElementById('filter-count').innerHTML = '<span class="spinner"></span> Loading...';
-  fetch(url)
-    .then(function(r) { if (!r.ok) throw new Error('Failed ' + r.status); return r.json(); })
+  fetch(url, { headers: authHeaders() })
+    .then(function(r) {
+      if (r.status === 401 || r.status === 403) { showAuthError(); throw new Error('unauthorized'); }
+      if (!r.ok) throw new Error('Failed ' + r.status);
+      return r.json();
+    })
     .then(function(data) {
       allPins = Array.isArray(data) ? data : data.pins;
       totalPins = Array.isArray(data) ? data.length : data.total;
@@ -399,7 +419,7 @@ function addMarker(lat, lng, p) {
     '<div class="popup-name">' + esc(p.user_name) + '</div>' +
     (p.city || p.country ? '<div class="popup-time">' + [p.city, p.country].filter(Boolean).map(esc).join(', ') + (p.country_code ? ' (' + esc(p.country_code) + ')' : '') + '</div>' : '') +
     '<div class="popup-time">' + new Date(p.created_at).toLocaleString() + '</div>' +
-    '<video class="popup-video" src="/api/video?file_id=' + esc(p.video_file_id) + '" controls preload="metadata" playsinline></video>'
+    '<video class="popup-video" src="' + videoUrl(p.video_file_id) + '" controls preload="metadata" playsinline></video>'
   ));
 }
 
@@ -479,7 +499,7 @@ function addGroupMarker(lat, lng, pins) {
 document.addEventListener('click', function(e) {
   var v = e.target.closest('video[data-file-id]');
   if (v && !v.src) {
-    v.src = '/api/video?file_id=' + v.dataset.fileId;
+    v.src = videoUrl(v.dataset.fileId);
     v.removeAttribute('data-file-id');
     v.play();
   }
