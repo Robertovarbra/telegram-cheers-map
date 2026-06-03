@@ -62,6 +62,8 @@ async def main() -> None:
     migrate_db()
 
     web_app = web.Application()
+    # Chat-scoped routes authorize the caller internally (see auth._authorize / web_handlers).
+    # /api/health and /api/bot-info are intentionally public — keep new chat-data routes off that list.
     web_app.router.add_get("/api/health", handle_health)
     web_app.router.add_get("/api/pins", handle_pins)
     web_app.router.add_get("/api/pins-meta", handle_pins_meta)
