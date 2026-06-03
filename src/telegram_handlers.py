@@ -5,8 +5,8 @@ from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarku
 from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
-from config import BOT_USERNAME, WEB_URL, logger
-from database import add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, get_pin, set_chat_setting, set_user_pref
+from config import BOT_USERNAME, logger
+from database import add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, get_pin, pop_pending_pin, set_chat_setting, set_pending_pin, set_user_pref
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -200,8 +200,6 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = message.from_user
     user_name = user.full_name or user.username or str(user.id)
 
-    context.user_data.pop("bot_reply_message_id", None)
-
     if chat.type == Chat.SUPERGROUP:
         video_link = f"https://t.me/c/{str(chat.id)[4:]}/{message.message_id}"
     elif chat.type == Chat.GROUP:
@@ -209,17 +207,31 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         video_link = message.link
 
-    context.user_data["pending_video"] = {
-        "file_id": file_id,
-        "message_id": message.message_id,
-        "chat_id": message.chat_id,
-        "user_id": user.id,
-        "user_name": user_name,
-        "video_link": video_link,
-    }
+    # A one-tap "share location" button opens the Mini App in location mode (startapp=loc_c<chat_id>),
+    # which reads the device location and posts it to /api/submit-location. request_location keyboard
+    # buttons don't work in groups, so we route through the Mini App instead. Requires BOT_USERNAME for
+    # the deep link; without it we fall back to the attachment-menu instructions only.
+    reply_markup = None
+    if BOT_USERNAME:
+        share_url = f"https://t.me/{BOT_USERNAME}/map?startapp=loc_c{chat.id}"
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("📍 Share location", url=share_url)]])
+        prompt = "Cheers received! Tap 📍 Share location below to pin it on the map — or send your location from the attachment menu."
+    else:
+        prompt = "Cheers received! Now tap the 📍 attachment button and send your location to pin it on the map."
 
-    bot_reply = await message.reply_text("Cheers received! Now tap the 📍 attachment button and send your location to pin it on the map.")
-    context.user_data["bot_reply_message_id"] = bot_reply.message_id
+    bot_reply = await message.reply_text(prompt, reply_markup=reply_markup)
+
+    # Persist to the DB (not context.user_data) so the Mini App's web handler and the attachment-menu
+    # fallback both consume the same pending row — whichever completes first wins, preventing double pins.
+    set_pending_pin(
+        chat_id=chat.id,
+        user_id=user.id,
+        file_id=file_id,
+        message_id=message.message_id,
+        user_name=user_name,
+        video_link=video_link,
+        prompt_msg_id=bot_reply.message_id,
+    )
 
 
 _geocode_cache: dict[tuple[float, float], tuple[str | None, str | None, str | None]] = {}
@@ -266,20 +278,25 @@ async def reverse_geocode(lat, lng):
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    pending = context.user_data.pop("pending_video", None)
-    if not pending:
-        return
-
     location = update.message.location
     if not location:
+        return
+
+    chat_id = update.effective_chat.id
+    user = update.message.from_user
+
+    # Consume this user's pending video for this chat. Only the user who sent the video has a row,
+    # so the bot only ever pairs a location with that same user's pending cheers.
+    pending = pop_pending_pin(chat_id, user.id)
+    if not pending:
         return
 
     city, country, country_code = await reverse_geocode(location.latitude, location.longitude)
 
     add_pin(
-        chat_id=pending["chat_id"],
+        chat_id=chat_id,
         message_id=pending["message_id"],
-        user_id=pending["user_id"],
+        user_id=user.id,
         user_name=pending["user_name"],
         video_file_id=pending["file_id"],
         lat=location.latitude,
@@ -290,15 +307,14 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         country_code=country_code,
     )
 
-    chat_id = update.effective_chat.id
     location_msg_id = update.effective_message.message_id
-    bot_reply_msg_id = context.user_data.pop("bot_reply_message_id", None)
+    prompt_msg_id = pending.get("prompt_msg_id")
 
     confirmation = await context.bot.send_message(chat_id, "Pinned! Use /map to view the cheers map.")
 
     await asyncio.sleep(3)
 
-    for mid in (confirmation.message_id, bot_reply_msg_id, location_msg_id):
+    for mid in (confirmation.message_id, prompt_msg_id, location_msg_id):
         if mid:
             try:
                 await context.bot.delete_message(chat_id, mid)

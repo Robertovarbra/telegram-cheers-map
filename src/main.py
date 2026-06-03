@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from config import TOKEN, WEB_DIR, WEB_HOST, WEB_PORT, logger
-from database import init_db, migrate_db
+from database import delete_stale_pending_pins, init_db, migrate_db
 from telegram_handlers import (
     cleanup_inactive_chats,
     color_command,
@@ -33,6 +33,7 @@ from web_handlers import (
     handle_health,
     handle_pins,
     handle_pins_meta,
+    handle_submit_location,
     handle_video_proxy,
 )
 
@@ -60,6 +61,7 @@ async def _watchdog_loop() -> None:
 async def main() -> None:
     init_db()
     migrate_db()
+    delete_stale_pending_pins()
 
     web_app = web.Application()
     # Chat-scoped routes authorize the caller internally (see auth._authorize / web_handlers).
@@ -69,6 +71,7 @@ async def main() -> None:
     web_app.router.add_get("/api/pins-meta", handle_pins_meta)
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
+    web_app.router.add_post("/api/submit-location", handle_submit_location)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
 
     async def index_handler(_request: web.Request) -> web.FileResponse:

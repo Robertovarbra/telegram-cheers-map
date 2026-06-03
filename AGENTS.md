@@ -43,10 +43,12 @@ Ruff is configured in `pyproject.toml`. Two choices to be aware of: `web/` is ex
 
 ### Pin creation is a two-step, stateful flow
 A pin requires both a video note and a location, sent as separate messages:
-1. `handle_video` (filter `VIDEO_NOTE`, groups only) stashes `pending_video` in `context.user_data`.
-2. `handle_location` pops it, calls `reverse_geocode`, then `add_pin`.
+1. `handle_video` (filter `VIDEO_NOTE`, groups only) persists the video to the `pending_pins` table (`database.set_pending_pin`, keyed by `(chat_id, user_id)`) and replies with a **📍 Share location** inline button (a deep link to the Mini App in location mode, `startapp=loc_c{chat_id}`).
+2. The location arrives one of two ways, and **both consume the same `pending_pins` row** (whichever completes first wins — `pop_pending_pin` deletes it atomically inside a `BEGIN IMMEDIATE` txn, so there's no double-pin):
+   - **Mini App (one-tap):** the button opens `web/index.html` in share mode; `LocationManager.getLocation()` (Bot API 8.0+) reads the device location and POSTs it to `POST /api/submit-location`, which authorizes the caller, pops the pending row, and calls `add_pin`.
+   - **Attachment menu (fallback):** the user sends a location message; `handle_location` pops the pending row (keyed by the *sender's* `(chat_id, user_id)`, which is what enforces "only the original sender completes it"), calls `reverse_geocode`, then `add_pin`.
 
-So pinning depends on per-user `context.user_data` carrying state between two updates. Bot prompt/confirmation messages are auto-deleted after a few seconds (best-effort, errors swallowed).
+`request_location` reply-keyboard buttons are private-chat only (they don't fire in groups), which is why the one-tap path routes through the Mini App rather than a native keyboard button. Pending rows are bounded (one per user per chat, overwritten on re-send) and swept on startup via `delete_stale_pending_pins` (24 h TTL) and on chat removal via `delete_chat_pins`. Bot prompt/confirmation messages are auto-deleted after a few seconds (best-effort, errors swallowed).
 
 ### Videos are never stored — only Telegram `file_id`
 `add_pin` stores the `file_id`. The frontend `<video>` points at `/api/video?file_id=...`, and `handle_video_proxy` resolves the file via `bot.get_file()` then streams it from Telegram's CDN, forwarding the `Range` header (essential for seeking). This is why the web server needs the shared bot instance.
@@ -60,12 +62,16 @@ When the bot is removed from a chat (`handle_my_chat_member` → LEFT/BANNED), *
 ### Mini App + map (`web/index.html`)
 Single static HTML file, vanilla JS + Leaflet from unpkg CDN — **no build step**. The `/map` command opens it as a Telegram Mini App via `t.me/{BOT_USERNAME}/map?startapp=c{chat_id}`. The frontend derives `chat_id` from (in order) `?chat_id=`, `tgWebAppStartParam`, or `Telegram.WebApp.initDataUnsafe.start_param`, parsing the `c{chatId}` format. All dynamic values are escaped via `esc()` (XSS guard). Pins within `GROUP_RADIUS` (10 m) are clustered. Filtering is split: **server-side** (`user_ids`, `date_from`, `date_to`, `q` location) with LIMIT/OFFSET 500 pagination, plus **client-side** ("only in map view" bounds filter, which disables pagination).
 
+The same file also serves a **location-share mode**: when the start param begins with `loc_` (e.g. `startapp=loc_c{chat_id}`), `startLocationShare()` replaces the map with a one-tap screen, captures the device location via `Telegram.WebApp.LocationManager`, and POSTs it to `/api/submit-location`. It gracefully degrades — unsupported client (< Bot API 8.0), denied permission, or timeout all fall back to a "use the 📍 attachment menu" message. To halt the normal map init in this mode it `throw`s after dispatching (same pattern as the missing-`chat_id` guard).
+
 ## Security
 
 The Mini App API (`/api/*`) is the only externally reachable surface (behind the Cloudflare Tunnel). Two invariants gate every chat-scoped request — both live in `auth.py` and are bundled by `_authorize(request, chat_id)` in `web_handlers.py`:
 
 1. **initData HMAC** — the request must carry a valid Telegram `initData`, verified by `verify_init_data` (HMAC-SHA256 against `BOT_TOKEN`, plus `auth_date` freshness vs `INITDATA_MAX_AGE`). `extract_init_data` reads it from the `Authorization: tma <data>` header, falling back to `?auth=` for `<video>` tags that can't set headers. **Never trust a client-supplied `chat_id`/`user_id` that isn't backed by a valid signature** — the `chat_id` query param is attacker-controlled; only the signed `user.id` is trustworthy.
 2. **Membership** — `is_member(bot, chat_id, user_id)` must pass before returning chat data, so a caller can only read chats they belong to (the `chat_id`-scoped equivalent of tenant isolation). Results are cached ~5 min. `handle_video_proxy` does its own variant: it verifies `initData`, then allows the stream only if the user is a member of *some* chat that references the `file_id` (`get_chat_ids_for_file`).
+
+`POST /api/submit-location` (the Mini App one-tap location path) is chat-scoped and goes through `_authorize` like the read endpoints, but it **writes**: it attributes the new pin to the *signed* `user.id` (never a body/query value) and pops the pending row by that same `(chat_id, user_id)`, so a caller can only ever complete their own pending cheers. Coordinates are range-checked before use.
 
 Intentionally public (no auth): `handle_health`, `handle_bot_info`.
 
