@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from config import DB_PATH
 
@@ -74,6 +74,22 @@ def migrate_db():
             """)
         except sqlite3.OperationalError:
             pass
+        try:
+            c.execute("""
+                CREATE TABLE pending_pins (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    file_id TEXT NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    user_name TEXT NOT NULL,
+                    video_link TEXT,
+                    prompt_msg_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, user_id)
+                )
+            """)
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
     finally:
         conn.close()
@@ -137,6 +153,80 @@ def set_chat_setting(chat_id, key, value):
                 (chat_id, value, now, now),
             )
             conn.commit()
+    finally:
+        conn.close()
+
+
+def set_pending_pin(chat_id, user_id, file_id, message_id, user_name, video_link, prompt_msg_id):
+    """Store the video a user just sent, awaiting a location. Keyed by (chat_id, user_id),
+    so a new video from the same user in the same chat overwrites the previous pending one."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        c.execute(
+            """
+            INSERT INTO pending_pins (chat_id, user_id, file_id, message_id, user_name, video_link, prompt_msg_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                file_id = excluded.file_id,
+                message_id = excluded.message_id,
+                user_name = excluded.user_name,
+                video_link = excluded.video_link,
+                prompt_msg_id = excluded.prompt_msg_id,
+                created_at = excluded.created_at
+        """,
+            (chat_id, user_id, file_id, message_id, user_name, video_link, prompt_msg_id, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def pop_pending_pin(chat_id, user_id, max_age_seconds=86400):
+    """Atomically fetch and delete the caller's pending video for a chat.
+
+    The SELECT + DELETE run inside a single BEGIN IMMEDIATE transaction so two concurrent
+    callers (e.g. a double-tapped Mini App button) can't both claim the same row. Returns a
+    dict on success, or None if there is no pending row (or it is older than max_age_seconds)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute(
+            "SELECT file_id, message_id, user_name, video_link, prompt_msg_id, created_at FROM pending_pins WHERE chat_id = ? AND user_id = ?",
+            (chat_id, user_id),
+        )
+        row = c.fetchone()
+        if row:
+            c.execute("DELETE FROM pending_pins WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+        c.execute("COMMIT")
+        if not row:
+            return None
+        file_id, message_id, user_name, video_link, prompt_msg_id, created_at = row
+        if max_age_seconds is not None:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(created_at)).total_seconds()
+            except ValueError:
+                return None  # unparseable timestamp -> treat as expired (fail closed)
+            if age > max_age_seconds:
+                return None
+        return {"file_id": file_id, "message_id": message_id, "user_name": user_name, "video_link": video_link, "prompt_msg_id": prompt_msg_id}
+    finally:
+        conn.close()
+
+
+def delete_stale_pending_pins(max_age_seconds=86400):
+    """Best-effort cleanup of pending videos that were never completed with a location."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)).isoformat()
+        c.execute("DELETE FROM pending_pins WHERE created_at < ?", (cutoff,))
+        count = c.rowcount
+        conn.commit()
+        return count
     finally:
         conn.close()
 
@@ -254,6 +344,7 @@ def delete_chat_pins(chat_id):
         conn.commit()
         try:
             c.execute("DELETE FROM chat_settings WHERE chat_id = ?", (chat_id,))
+            c.execute("DELETE FROM pending_pins WHERE chat_id = ?", (chat_id,))
             conn.commit()
         except Exception:
             pass
