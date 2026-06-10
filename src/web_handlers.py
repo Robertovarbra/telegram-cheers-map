@@ -1,11 +1,197 @@
 import asyncio
+import hashlib
+import time
+from collections import OrderedDict
+from pathlib import Path
 
 from aiohttp import ClientSession as AiohttpClient
 from aiohttp import ClientTimeout, web
 
 from auth import extract_init_data, is_member, verify_init_data
+from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES
 from database import add_pin, get_chat_ids_for_file, get_pins, get_pins_meta, pop_pending_pin
 from telegram_handlers import reverse_geocode
+
+# Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
+# the Bot API each time. Telegram guarantees a get_file path stays valid for at least 1h, so a 45m
+# TTL is always served while still live. Same bounded-LRU shape as auth._member_cache.
+_FILE_PATH_TTL = 2700
+_FILE_PATH_CACHE_MAX = 2000
+_file_path_cache: dict[str, tuple[float, str]] = {}
+
+
+async def _resolve_file_path(bot, file_id: str) -> str:
+    now = time.monotonic()
+    cached = _file_path_cache.get(file_id)
+    if cached and cached[0] > now:
+        return cached[1]
+    path = (await bot.get_file(file_id)).file_path
+    if len(_file_path_cache) >= _FILE_PATH_CACHE_MAX:
+        for stale in [k for k, v in _file_path_cache.items() if v[0] <= now]:
+            _file_path_cache.pop(stale, None)
+        if len(_file_path_cache) >= _FILE_PATH_CACHE_MAX:
+            _file_path_cache.pop(next(iter(_file_path_cache)), None)
+    _file_path_cache[file_id] = (now + _FILE_PATH_TTL, path)
+    return path
+
+
+# On-disk byte cache: pull each clip from Telegram's CDN once, then serve all repeats (any user, any
+# reload, any Range) straight off the Pi's disk. Browsers re-issue a `Range: bytes=0-` per <video>
+# on every fresh page load and ignore `immutable`, so without this the proxy re-streams the same
+# bytes over and over. Bounded by a simple LRU; all bookkeeping is synchronous (single event loop),
+# so only per-file_id locks are needed — to stop two concurrent first-loads double-fetching.
+_CACHE_CONTROL = "private, max-age=86400, immutable"  # private: auth-gated, so no shared/CDN cache
+_CACHE_LOCKS_MAX = 4096
+_cache_lru: "OrderedDict[str, int]" = OrderedDict()  # filename -> size, oldest first
+_cache_total = 0
+_cache_locks: dict[str, asyncio.Lock] = {}
+_cache_ready = False
+
+
+def _cache_name(file_id: str) -> str:
+    return hashlib.sha256(file_id.encode()).hexdigest() + ".mp4"  # .mp4 so FileResponse infers video/mp4
+
+
+def _init_cache() -> None:
+    """Rebuild LRU accounting from whatever's on disk (so the cap survives restarts). Runs once."""
+    global _cache_total, _cache_ready
+    if _cache_ready:
+        return
+    VIDEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    found = []
+    for p in VIDEO_CACHE_DIR.iterdir():
+        if p.is_file() and p.name.endswith(".mp4"):
+            try:
+                st = p.stat()
+                found.append((st.st_mtime, p.name, st.st_size))
+            except OSError:
+                pass
+    for _, name, size in sorted(found):  # oldest mtime first == LRU order
+        _cache_lru[name] = size
+        _cache_total += size
+    _evict()  # enforce the cap right away, so a lowered VIDEO_CACHE_MAX_MB / oversized dir is fixed on boot
+    _cache_ready = True
+
+
+def _evict() -> None:
+    global _cache_total
+    while _cache_total > VIDEO_CACHE_MAX_BYTES and len(_cache_lru) > 1:  # never drop the just-added sole entry
+        name, size = _cache_lru.popitem(last=False)
+        _cache_total -= size
+        try:
+            (VIDEO_CACHE_DIR / name).unlink()
+        except OSError:
+            pass
+
+
+def _record(name: str, size: int) -> None:
+    """Mark a freshly-written file as most-recently-used, then evict down to the cap."""
+    global _cache_total
+    old = _cache_lru.pop(name, None)  # drop any stale accounting (e.g. file had vanished off disk)
+    if old is not None:
+        _cache_total -= old
+    _cache_lru[name] = size
+    _cache_total += size
+    _evict()
+
+
+def _prune_locks(keep: str) -> None:
+    """Bound _cache_locks: drop idle (unlocked) locks once the map grows large. An unlocked lock has
+    no holder, so dropping it can't strand a waiter; the worst case is a rare, harmless re-fetch."""
+    if len(_cache_locks) <= _CACHE_LOCKS_MAX:
+        return
+    for k in [k for k, v in _cache_locks.items() if k != keep and not v.locked()]:
+        _cache_locks.pop(k, None)
+
+
+def _cache_lookup(file_id: str) -> Path | None:
+    """Hit path: return the cached file (marking it MRU), or None on a miss. No lock — the LRU
+    bookkeeping is synchronous, and a concurrent miss for the same file re-checks under its lock."""
+    _init_cache()
+    name = _cache_name(file_id)
+    path = VIDEO_CACHE_DIR / name
+    if name in _cache_lru and path.exists():
+        _cache_lru.move_to_end(name)
+        return path
+    return None
+
+
+def _video_file_response(path: Path) -> web.FileResponse:
+    # FileResponse natively handles Range / Content-Range / Accept-Ranges / conditional requests.
+    resp = web.FileResponse(path)
+    resp.headers["Content-Disposition"] = "inline"
+    resp.headers["Cache-Control"] = _CACHE_CONTROL
+    return resp
+
+
+async def _tee(source, stream: web.StreamResponse, tmp: Path) -> bool:
+    """Forward upstream chunks to the client (so the first byte ships immediately) while teeing them
+    into `tmp`. Returns True iff the whole file landed in `tmp` and is safe to promote to the cache.
+    A client disconnect or a disk error degrades to a plain pass-through (no cache write this time)."""
+    caching = True
+    f = None
+    try:
+        f = open(tmp, "wb")
+    except OSError:
+        caching = False
+    try:
+        async for chunk in source.iter_chunked(65536):
+            if caching:
+                try:
+                    f.write(chunk)
+                except OSError:  # e.g. disk full — keep serving the client, just don't cache
+                    caching = False
+            try:
+                await stream.write(chunk)
+            except (ConnectionResetError, asyncio.CancelledError):  # client gone — abandon the partial cache
+                return False
+    finally:
+        if f is not None:
+            f.close()
+    return caching
+
+
+async def _stream_and_cache(request: web.Request, bot, file_id: str) -> web.StreamResponse:
+    """Miss path: stream the clip from Telegram to the client AND warm the disk cache in one pass."""
+    name = _cache_name(file_id)
+    path = VIDEO_CACHE_DIR / name
+    lock = _cache_locks.setdefault(file_id, asyncio.Lock())
+    _prune_locks(file_id)
+    async with lock:
+        cached = _cache_lookup(file_id)  # another request may have cached it while we waited for the lock
+        if cached is not None:
+            return _video_file_response(cached)
+        try:
+            file_path = await _resolve_file_path(bot, file_id)
+        except Exception:
+            raise web.HTTPNotFound(text="file not found")
+
+        tmp = path.with_name(name + ".tmp")
+        renamed = False
+        try:
+            async with AiohttpClient() as session:
+                async with session.get(file_path, timeout=ClientTimeout(sock_read=30)) as up:
+                    if up.status != 200:
+                        raise web.HTTPNotFound(text="file not found")
+                    headers = {
+                        "Content-Type": "video/mp4",
+                        "Content-Disposition": "inline",
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": _CACHE_CONTROL,
+                    }
+                    if "Content-Length" in up.headers:
+                        headers["Content-Length"] = up.headers["Content-Length"]
+                    stream = web.StreamResponse(status=200, headers=headers)
+                    await stream.prepare(request)
+                    complete = await _tee(up.content, stream, tmp)
+            if complete:
+                tmp.replace(path)  # atomic: readers never see a partial file
+                renamed = True
+                _record(name, path.stat().st_size)
+            return stream
+        finally:
+            if not renamed:
+                tmp.unlink(missing_ok=True)
 
 
 async def _authorize(request: web.Request, chat_id: int):
@@ -69,42 +255,11 @@ async def handle_video_proxy(request: web.Request) -> web.StreamResponse:
     else:
         raise web.HTTPForbidden(text="forbidden")
 
-    try:
-        file = await bot.get_file(file_id)
-    except Exception:
-        raise web.HTTPNotFound(text="file not found")
-
-    range_header = request.headers.get("Range", "")
-
-    async with AiohttpClient() as session:
-        req_headers = {}
-        if range_header:
-            req_headers["Range"] = range_header
-
-        async with session.get(file.file_path, headers=req_headers, timeout=ClientTimeout(sock_read=10)) as resp:
-            if resp.status == 404:
-                raise web.HTTPNotFound(text="file not found on Telegram")
-            if resp.status not in (200, 206):
-                raise web.HTTPNotFound(text="unexpected response from Telegram")
-
-            headers = {
-                "Content-Type": "video/mp4",
-                "Content-Disposition": "inline",
-                "Accept-Ranges": "bytes",
-            }
-            if "Content-Length" in resp.headers:
-                headers["Content-Length"] = resp.headers["Content-Length"]
-            if "Content-Range" in resp.headers:
-                headers["Content-Range"] = resp.headers["Content-Range"]
-
-            stream = web.StreamResponse(status=resp.status, headers=headers)
-            await stream.prepare(request)
-            try:
-                async for chunk in resp.content.iter_chunked(65536):
-                    await stream.write(chunk)
-            except (ConnectionResetError, asyncio.CancelledError):
-                pass
-            return stream
+    cached = _cache_lookup(file_id)
+    if cached is not None:
+        return _video_file_response(cached)
+    # Miss: stream from Telegram immediately (no download-first stall) while warming the cache.
+    return await _stream_and_cache(request, bot, file_id)
 
 
 async def handle_bot_info(request: web.Request) -> web.Response:
