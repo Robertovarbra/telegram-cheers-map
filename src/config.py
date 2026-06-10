@@ -30,3 +30,9 @@ INITDATA_MAX_AGE = int(os.getenv("INITDATA_MAX_AGE_HOURS", "24")) * 3600
 
 DB_PATH = BASE_DIR / "videos.db"
 WEB_DIR = BASE_DIR / "web"
+
+# On-disk byte cache for the /api/video proxy: a clip is pulled from Telegram once, then every
+# repeat (any user, any reload, any Range) is served from here instead of re-streaming the CDN.
+# Bounded by an LRU eviction; size is env-tunable.
+VIDEO_CACHE_DIR = BASE_DIR / "video_cache"
+VIDEO_CACHE_MAX_BYTES = int(os.getenv("VIDEO_CACHE_MAX_MB", "512")) * 1024 * 1024

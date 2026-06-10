@@ -41,6 +41,9 @@ wheels/
 *.db
 videos.db
 
+# Proxy video byte cache (regenerated on demand from Telegram)
+video_cache/
+
 # IDE
 .idea/
 .vscode/
