@@ -124,6 +124,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet"><div id="detail-list"></div></div>
 </div>
-<script type="module" src="/js/main.js"></script>
+<!-- ?v bumped on deploy to dodge Cloudflare's browser-cache TTL on /js/ (it overrides no-cache). -->
+<script type="module" src="/js/main.js?v=2"></script>
 </body>
 </html>
