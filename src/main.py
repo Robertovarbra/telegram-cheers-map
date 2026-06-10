@@ -80,6 +80,17 @@ async def main() -> None:
         return resp
 
     web_app.router.add_get("/", index_handler)
+    # Public static front-end modules (same trust level as index.html — no secrets). aiohttp
+    # blocks path traversal outside this dir; directory listing stays off (show_index default).
+    web_app.router.add_static("/js/", WEB_DIR / "js")
+
+    # The modules are unhashed and change on every deploy; force revalidation so a client can't
+    # serve a stale (or 404-from-a-prior-deploy) /js/ file, which silently blanks the Mini App.
+    async def _revalidate_js(request: web.Request, response: web.StreamResponse) -> None:
+        if request.path.startswith("/js/"):
+            response.headers["Cache-Control"] = "no-cache"
+
+    web_app.on_response_prepare.append(_revalidate_js)
 
     runner = web.AppRunner(web_app)
     await runner.setup()
