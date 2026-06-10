@@ -19,6 +19,71 @@ There are **no tests** in this repo.
 
 Ruff is configured in `pyproject.toml`. Two choices to be aware of: `web/` is excluded from linting, and the line length is a wide **160** (so don't hand-wrap long lines to 88). Run `ruff check`/`ruff format` and match the existing style.
 
+## Verifying your own frontend changes (no Telegram account needed)
+
+There's no test suite, and you **cannot** exercise the Mini App through real Telegram from here — there's no Telegram account, and the `/api/*` endpoints reject any request without a valid `initData` HMAC, which you can't forge without `BOT_TOKEN`. So to actually *see* a `web/` change run (looping markers, viewport gating, zoom clustering, the detail overlay, colors), drive a real Chrome against a throwaway local server that serves the real frontend with **fake `/api/*` data and auth disabled**. This is the harness used to verify the video-marker work; rebuild it the same way for any future `web/` change.
+
+Two things make the local server non-optional: `web/index.html` loads `web/js/*.js` as **ES modules** (`<script type="module">`), which won't load over `file://` (CORS), and the `<video>` proxy needs **HTTP Range** support to seek/loop.
+
+**1. A sample clip + a mock server** (both live in `/tmp` — never commit them):
+
+```bash
+mkdir -p /tmp/cheers-map-test
+# short looping test clip with a fast-start moov atom so it streams immediately
+ffmpeg -f lavfi -i testsrc=duration=3:size=240x240:rate=15 -pix_fmt yuv420p \
+  -movflags +faststart -y /tmp/cheers-map-test/sample.mp4
+```
+
+```python
+# /tmp/cheers-map-test/server.py  — throwaway; serves the REAL web/ with mocked /api/*
+import http.server, json, re
+
+WEB = "/Users/mauvqz/Documents/code/cheers-map/web"   # point at the repo's web/
+VIDEO = "/tmp/cheers-map-test/sample.mp4"
+# fixtures: a 3-user cluster at one spot (exercises ring colors + count badge + label-hiding) and a lone far pin
+PINS = [
+    {"id": 1, "latitude": 48.8566, "longitude": 2.3522, "user_id": 1, "user_name": "Alice", "pin_color": "#e74c3c", "pin_emoji": "\U0001f37a", "created_at": "2026-06-10T12:00:00", "video_file_id": "f1"},
+    {"id": 2, "latitude": 48.8567, "longitude": 2.3523, "user_id": 2, "user_name": "Bob",   "pin_color": "#3498db", "pin_emoji": "\U0001f377", "created_at": "2026-06-10T13:00:00", "video_file_id": "f2"},
+    {"id": 3, "latitude": 48.8566, "longitude": 2.3522, "user_id": 3, "user_name": "Cara",  "pin_color": "#2ecc71", "pin_emoji": "\U0001f942", "created_at": "2026-06-10T14:00:00", "video_file_id": "f3"},
+    {"id": 4, "latitude": 40.4168, "longitude": -3.7038, "user_id": 1, "user_name": "Alice", "pin_color": "#e74c3c", "pin_emoji": "\U0001f37a", "created_at": "2026-06-09T10:00:00", "video_file_id": "f1"},
+]
+
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k): super().__init__(*a, directory=WEB, **k)
+    def do_GET(self):
+        if self.path.startswith("/api/pins"):          # the only read the map needs; returns a bare array
+            body = json.dumps(PINS).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
+        if self.path.startswith("/api/video"):
+            data = open(VIDEO, "rb").read(); n = len(data); rng = self.headers.get("Range")
+            if rng:                                     # Range support = seeking/looping works
+                m = re.search(r"bytes=(\d+)-(\d*)", rng); s = int(m.group(1)); e = int(m.group(2)) if m.group(2) else n - 1
+                chunk = data[s:e + 1]
+                self.send_response(206); self.send_header("Content-Range", f"bytes {s}-{e}/{n}")
+            else:
+                chunk = data; self.send_response(200)
+            self.send_header("Accept-Ranges", "bytes"); self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(len(chunk))); self.end_headers(); self.wfile.write(chunk); return
+        return super().do_GET()                         # serves index.html + /js/*.js statically
+
+H.extensions_map[".js"] = "text/javascript"             # modules need the right MIME or Chrome refuses them
+http.server.HTTPServer(("127.0.0.1", 8777), H).serve_forever()
+```
+
+```bash
+python3 /tmp/cheers-map-test/server.py &     # or run_in_background
+```
+
+**2. Drive it with the Chrome DevTools MCP** (`chrome-devtools` tools): `navigate_page` to `http://localhost:8777/?chat_id=-1001`. The frontend reads the chat from the `?chat_id=` query param first, so the signed `start_param` is never needed; `window.Telegram.WebApp.initData` is empty and the mock ignores the (empty) `Authorization: tma` header. Then verify with `take_screenshot` and `evaluate_script` — e.g. `document.elementFromPoint(x, y)` should return a `VIDEO.marker-video` (catches the stacking-context bug where a placeholder paints over the clip), a marker video's `currentTime` should keep advancing and wrap past clip end (looping), and changing `map.setZoom(...)` then re-reading marker count verifies pixel clustering.
+
+**3. Fast no-browser syntax gate** before any of the above: `for f in web/js/*.js; do node --check "$f"; done`.
+
+**Gotchas (each cost real time before):**
+- Kill a stale server by **port, not name** (the process arg is just `server.py`): `lsof -nP -iTCP:8777 -sTCP:LISTEN -t | xargs kill`.
+- "Browser already running" from the MCP means a stale **MCP-owned** Chrome — it runs its own dedicated profile (`chrome-devtools-mcp/chrome-profile`), **not** your personal Chrome. Kill the process that has `--user-data-dir=...chrome-devtools-mcp...` and no `--type=`; never the user's Chrome.
+- Clean up when done: `rm -rf /tmp/cheers-map-test`.
+
 ## Config / running
 
 `src/config.py` loads env vars from `.env` (via `python-dotenv`) or real env vars, which take priority and are preferred in production. Two carry non-obvious consequences: a missing `BOT_TOKEN` aborts startup with `SystemExit`, and a missing `BOT_USERNAME` *silently* breaks Mini App deep links — `/map` emits broken `t.me/{bot}/map?startapp=...` links rather than erroring. The remaining vars and their defaults live in `.env.example`.
