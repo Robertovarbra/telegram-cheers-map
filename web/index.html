@@ -43,7 +43,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 #detail-stage { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; }
 #detail-big { position: relative; width: min(72vw, 300px); height: min(72vw, 300px); border-radius: 50%; overflow: hidden; border: 3px solid #fff; box-shadow: 0 8px 30px rgba(0,0,0,0.55); background: #222; }
 #detail-big video { width: 100%; height: 100%; object-fit: cover; display: block; }
-#detail-sheet { position: relative; z-index: 1; flex: 0 0 auto; background: #fff; border-radius: 18px 18px 0 0; max-height: 42vh; overflow-y: auto; overscroll-behavior: contain; box-shadow: 0 -4px 18px rgba(0,0,0,0.25); padding: 8px 0 calc(14px + env(safe-area-inset-bottom)); }
+#detail-sheet { position: relative; z-index: 1; flex: 0 0 auto; background: #fff; border-radius: 18px 18px 0 0; max-height: 42vh; overflow-y: auto; overscroll-behavior: contain; box-shadow: 0 -4px 18px rgba(0,0,0,0.25); padding: 0 0 calc(14px + env(safe-area-inset-bottom)); }
 .detail-row { display: flex; align-items: center; gap: 12px; padding: 9px 18px; cursor: pointer; }
 .detail-row.active { background: #eef3f8; }
 .detail-thumb { position: relative; width: 46px; height: 46px; border-radius: 50%; overflow: hidden; flex-shrink: 0; border: 2px solid #fff; background: #bbb; }
@@ -53,6 +53,23 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .detail-rowtext { font-size: 15px; color: #111; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-rowtext .dr-name { font-weight: 600; }
 .detail-rowtext .dr-date { color: #999; }
+/* Mode toggle: a header pinned to the top-right of the cheers list — Sequence (1->2->3->1) vs Loop
+   (replay one clip). Sticky so it stays put while the list scrolls underneath. */
+#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; justify-content: flex-end; padding: 8px 14px 6px; background: #fff; }
+.dm-toggle { display: inline-flex; gap: 2px; background: #eef0f3; border-radius: 999px; padding: 3px; }
+.dm-btn { border: none; background: transparent; color: #666; font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 6px 12px; border-radius: 999px; cursor: pointer; line-height: 1; white-space: nowrap; }
+.dm-btn.active { background: #fff; color: #111; box-shadow: 0 1px 2px rgba(0,0,0,0.18); }
+
+/* Persistent "Play" button: opens the detail player with every video currently in view, newest -> oldest. */
+#play-all {
+  position: absolute; left: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 1000;
+  width: 54px; height: 54px; border-radius: 50%; border: 3px solid #fff;
+  background: #ff3b30; color: #fff; cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; line-height: 1; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+}
+#play-all .pa-glyph { transform: translateX(2px); }  /* optically centre the triangle */
+#play-all.hidden { display: none; }
 
 #filter-toggle {
   position: absolute; top: 10px; right: 10px; z-index: 1000;
@@ -92,6 +109,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 </head>
 <body>
 <div id="map"></div>
+<button id="play-all" title="Play videos in view" aria-label="Play videos in view"><span class="pa-glyph">▶</span></button>
 <div id="filter-toggle" title="Toggle filters">🔽</div>
 <div id="filter-panel" class="hidden">
   <div class="filter-section">
@@ -122,9 +140,40 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <div id="detail-backdrop"></div>
   <button id="detail-close" aria-label="Close">✕</button>
   <div id="detail-stage"><div id="detail-big"></div></div>
-  <div id="detail-sheet"><div id="detail-list"></div></div>
+  <div id="detail-sheet">
+    <div id="detail-controls">
+      <div class="dm-toggle">
+        <button id="mode-sequence" class="dm-btn active" type="button">⏭ Sequence</button>
+        <button id="mode-loop" class="dm-btn" type="button">🔁 Loop</button>
+      </div>
+    </div>
+    <div id="detail-list"></div>
+  </div>
 </div>
-<!-- ?v bumped on deploy to dodge Cloudflare's browser-cache TTL on /js/ (it overrides no-cache). -->
-<script type="module" src="/js/main.js?v=2"></script>
+<!-- Cache-busting for the whole ES-module tree. Cloudflare puts a browser-cache TTL on /js/ (it
+     overrides no-cache), so a code change stays invisible until that TTL expires. Bumping the
+     entry's ?v alone is NOT enough: main.js's bare imports (./markers.js, ./detail.js, ...) resolve
+     to UNVERSIONED /js/*.js URLs that the client keeps serving from cache. The import map below
+     rewrites every sub-module to the same ?v, so a single version bump busts the entire tree.
+     On deploy, bump ?v EVERYWHERE here together (every map entry + the entry src). A client too old
+     to support import maps ignores the map and loads the modules unversioned — the app still works,
+     it just won't cache-bust on that client. -->
+<script type="importmap">
+{
+  "imports": {
+    "/js/api.js": "/js/api.js?v=5",
+    "/js/color.js": "/js/color.js?v=5",
+    "/js/config.js": "/js/config.js?v=5",
+    "/js/detail.js": "/js/detail.js?v=5",
+    "/js/filters.js": "/js/filters.js?v=5",
+    "/js/location-share.js": "/js/location-share.js?v=5",
+    "/js/markers.js": "/js/markers.js?v=5",
+    "/js/state.js": "/js/state.js?v=5",
+    "/js/util.js": "/js/util.js?v=5",
+    "/js/video.js": "/js/video.js?v=5"
+  }
+}
+</script>
+<script type="module" src="/js/main.js?v=5"></script>
 </body>
 </html>

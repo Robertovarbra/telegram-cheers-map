@@ -6,6 +6,9 @@ export function placeholderGlyph(p) {
   return p.pin_emoji ? esc(p.pin_emoji) : esc(((p.user_name || '?').trim()[0] || '?').toUpperCase());
 }
 
+// Newest-first comparator for pins/cheers (ISO `created_at` strings sort lexically).
+export function byNewest(a, b) { return b.created_at.localeCompare(a.created_at); }
+
 export function relTime(iso) {
   var then = new Date(iso).getTime();
   if (isNaN(then)) return '';
