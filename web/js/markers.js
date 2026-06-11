@@ -1,7 +1,7 @@
 // Map marker rendering: client-side filtering, screen-pixel clustering, and the circular
 // video-note markers (Snapchat-map style).
 import { state } from './state.js';
-import { esc, placeholderGlyph } from './util.js';
+import { esc, placeholderGlyph, byNewest } from './util.js';
 import { getColor, averageColor } from './color.js';
 import { CLUSTER_PX } from './config.js';
 import { updateVideoPlayback } from './video.js';
@@ -24,21 +24,12 @@ function getFilteredPins() {
   });
 }
 
-export function renderMarkers() {
-  state.markerGroup.clearLayers();
-  state.videoMarkers = [];
-  var filtered = getFilteredPins();
-  if (filtered.length === 0) {
-    document.getElementById('filter-count').textContent = '0 pins match filters';
-    document.getElementById('pagination').style.display = 'none';
-    return;
-  }
-  // Cluster by screen-pixel distance at the current zoom, so markers bundle when zoomed out and
-  // spread apart as you zoom in (re-clustered on every zoomend). Each cluster shows its latest
-  // video plus a count badge.
-  var z = state.map.getZoom();
+// Greedy screen-pixel clustering at a given zoom: a pin joins the first group whose running
+// centroid is within CLUSTER_PX, else it starts a new group. Shared by renderMarkers (to draw)
+// and zoomToSplit (to predict the zoom at which a cluster breaks apart).
+function clusterAtZoom(pins, z) {
   var groups = [];
-  filtered.forEach(function(p) {
+  pins.forEach(function(p) {
     var pt = state.map.project([p.latitude, p.longitude], z);
     var g = null;
     for (var i = 0; i < groups.length; i++) {
@@ -54,6 +45,37 @@ export function renderMarkers() {
       groups.push({ x: pt.x, y: pt.y, pins: [p] });
     }
   });
+  return groups;
+}
+
+// Tapping a cluster zooms in just enough to break it into ≥2 clusters (one unbundle step), centred
+// on the cluster. Returns false when no further zoom would split it (coincident points or maxZoom),
+// so the caller can open the detail player instead.
+function zoomToSplit(lat, lng, pins) {
+  var maxZoom = state.map.getMaxZoom();
+  for (var nz = Math.floor(state.map.getZoom()) + 1; nz <= maxZoom; nz++) {
+    if (clusterAtZoom(pins, nz).length > 1) {
+      state.map.setView([lat, lng], nz);
+      return true;
+    }
+  }
+  return false;
+}
+
+export function renderMarkers() {
+  state.markerGroup.clearLayers();
+  state.videoMarkers = [];
+  var filtered = getFilteredPins();
+  if (filtered.length === 0) {
+    document.getElementById('filter-count').textContent = '0 pins match filters';
+    document.getElementById('pagination').style.display = 'none';
+    return;
+  }
+  // Cluster by screen-pixel distance at the current zoom, so markers bundle when zoomed out and
+  // spread apart as you zoom in (re-clustered on every zoomend). Each cluster shows its latest
+  // video plus a count badge.
+  var z = state.map.getZoom();
+  var groups = clusterAtZoom(filtered, z);
   groups.forEach(function(g) {
     var ll = state.map.unproject(L.point(g.x, g.y), z);
     addVideoMarker(ll.lat, ll.lng, g.pins);
@@ -90,7 +112,7 @@ function ringBackground(pins) {
 // One marker per cluster (a single pin is just a cluster of one). Shows the latest cheer's video;
 // a count badge appears when the cluster holds more than one.
 function addVideoMarker(lat, lng, pins) {
-  var sorted = pins.slice().sort(function(a, b) { return b.created_at.localeCompare(a.created_at); });  // latest first (ISO strings sort lexically)
+  var sorted = pins.slice().sort(byNewest);  // latest first
   var top = sorted[0];  // latest cheer in the cluster
   var c = getColor(top.user_id, top.pin_color);
   var first = esc((top.user_name || '').split(' ')[0] || '');
@@ -122,8 +144,14 @@ function addVideoMarker(lat, lng, pins) {
     popupAnchor: [0, -34],
   });
   var marker = L.marker([lat, lng], { icon: icon });
-  marker.on('click', function () { openDetail(sorted, 0); });  // detail opens on the latest, then the rest
+  // A cluster zooms in one level to unbundle; a single pin (or a cluster that can't split any
+  // further — coincident points at max zoom) opens the detail player on the latest, then the rest.
+  marker.on('click', function () {
+    if (sorted.length > 1 && zoomToSplit(lat, lng, sorted)) return;
+    openDetail(sorted, 0);
+  });
   state.markerGroup.addLayer(marker);
   var el = marker.getElement();  // icon exists right after addLayer; cache the <video> for playback
-  state.videoMarkers.push({ video: el ? el.querySelector('video') : null, lat: lat, lng: lng, fileId: top.video_file_id });
+  // Keep the cluster's pins so the "Play" button can expand each visible bubble into its cheers.
+  state.videoMarkers.push({ video: el ? el.querySelector('video') : null, lat: lat, lng: lng, fileId: top.video_file_id, pins: sorted });
 }

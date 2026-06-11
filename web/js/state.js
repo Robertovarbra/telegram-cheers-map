@@ -10,6 +10,6 @@ export const state = {
   currentPage: 1,
   currentFilterParams: null,
   skipBoundsFit: false,
-  videoMarkers: [],   // {video, lat, lng, fileId} for every single (un-clustered) marker on the map
+  videoMarkers: [],   // {video, lat, lng, fileId, pins} per rendered cluster marker on the map
   detailPins: null,   // pins shown in the open detail overlay (null when closed)
 };
