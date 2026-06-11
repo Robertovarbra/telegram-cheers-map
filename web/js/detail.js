@@ -7,23 +7,25 @@ import { pauseMarkerVideos, updateVideoPlayback, teardownVideo } from './video.j
 import { MAX_CONCURRENT_VIDEOS } from './config.js';
 
 let detailIdx = 0;     // which row in the open detail list is selected
-// How the big player behaves: 'sequence' auto-advances newest -> oldest (wrapping); 'loop' replays the
-// current clip. Sequence is the default every time the player opens; the top control bar toggles it.
-let playbackMode = 'sequence';
+// How the big player behaves: when loop is OFF (the default) it auto-advances newest -> oldest
+// (wrapping); when ON it replays the current clip. Always starts OFF when the player opens; the
+// loop button in the top bar toggles it.
+let loopMode = false;
 
-// Sync the toggle's highlight and the playing <video>'s loop flag to the current mode.
-function applyPlaybackMode() {
-  var seqBtn = document.getElementById('mode-sequence');
+// Sync the loop button's active state and the playing <video>'s loop flag to the current mode.
+function applyLoopMode() {
   var loopBtn = document.getElementById('mode-loop');
-  if (seqBtn) seqBtn.classList.toggle('active', playbackMode === 'sequence');
-  if (loopBtn) loopBtn.classList.toggle('active', playbackMode === 'loop');
+  if (loopBtn) {
+    loopBtn.classList.toggle('active', loopMode);
+    loopBtn.setAttribute('aria-pressed', loopMode ? 'true' : 'false');
+  }
   var v = document.getElementById('detail-bigvid');
-  if (v) v.loop = (playbackMode === 'loop');  // loop=true means 'ended' never fires, so it just repeats
+  if (v) v.loop = loopMode;  // loop=true means 'ended' never fires, so it just repeats
 }
 
-function setPlaybackMode(mode) {
-  playbackMode = mode;
-  applyPlaybackMode();
+function toggleLoop() {
+  loopMode = !loopMode;
+  applyLoopMode();
 }
 
 // Open the bottom-left "Play": the videos in the bubbles currently on screen, newest first,
@@ -42,7 +44,7 @@ export function playAll() {
 
 export function openDetail(pins, idx) {
   if (!pins || !pins.length) return;
-  playbackMode = 'sequence';  // every open starts in sequence; the user can switch to loop from the bar
+  loopMode = false;  // every open starts auto-advancing; the user can switch to loop from the bar
   pauseMarkerVideos();  // free the proxy for the detail videos
   state.detailPins = pins;
   var list = document.getElementById('detail-list');
@@ -69,7 +71,7 @@ export function openDetail(pins, idx) {
     })(thumbs[ti]);
   }
   document.getElementById('detail').classList.remove('hidden');
-  applyPlaybackMode();  // reset the toggle highlight to the default before the first clip plays
+  applyLoopMode();  // reset the toggle highlight to the default before the first clip plays
   selectDetail(idx);
 }
 
@@ -84,11 +86,11 @@ function selectDetail(i) {
   var v = document.getElementById('detail-bigvid');
   v.src = videoUrl(p.video_file_id);
   v.muted = false;  // the detail view plays with sound; map markers and thumbnails stay muted
-  v.loop = (playbackMode === 'loop');  // loop replays this clip; sequence advances on 'ended'
+  v.loop = loopMode;  // loop replays this clip; otherwise it advances on 'ended'
   v.addEventListener('ended', function () {
-    // Sequence hands off to the next clip (wrapping after the oldest). In loop mode v.loop is set,
-    // so 'ended' never fires here — but guard on the mode anyway in case it was just toggled.
-    if (playbackMode === 'sequence' && state.detailPins) selectDetail((i + 1) % state.detailPins.length);
+    // Auto-advance hands off to the next clip (wrapping after the oldest). In loop mode v.loop is
+    // set, so 'ended' never fires here — but guard on the mode anyway in case it was just toggled.
+    if (!loopMode && state.detailPins) selectDetail((i + 1) % state.detailPins.length);
   });
   var pr = v.play();
   if (pr && pr.catch) pr.catch(function () { v.muted = true; var r = v.play(); if (r && r.catch) r.catch(function () {}); });
@@ -96,7 +98,7 @@ function selectDetail(i) {
   rows.forEach(function (r) {
     var active = parseInt(r.dataset.idx, 10) === i;
     r.classList.toggle('active', active);
-    if (active && playbackMode === 'sequence') r.scrollIntoView({ block: 'nearest' });  // keep the playing clip visible in the sheet
+    if (active && !loopMode) r.scrollIntoView({ block: 'nearest' });  // keep the playing clip visible in the sheet
   });
 }
 
@@ -107,15 +109,14 @@ function closeDetail() {
   document.getElementById('detail-big').innerHTML = '';
   document.getElementById('detail-list').innerHTML = '';
   state.detailPins = null;
-  playbackMode = 'sequence';
+  loopMode = false;
   updateVideoPlayback();  // resume the map previews
 }
 
 // Wire the overlay's click handlers (DOM is static, so this runs once at startup).
 export function initDetail() {
   document.getElementById('play-all').addEventListener('click', playAll);
-  document.getElementById('mode-sequence').addEventListener('click', function () { setPlaybackMode('sequence'); });
-  document.getElementById('mode-loop').addEventListener('click', function () { setPlaybackMode('loop'); });
+  document.getElementById('mode-loop').addEventListener('click', toggleLoop);
   document.getElementById('detail').addEventListener('click', function (e) {
     // keep open when tapping the video, or the sheet (which holds the list and the mode toggle)
     if (e.target.closest('#detail-big') || e.target.closest('#detail-sheet')) return;

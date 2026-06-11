@@ -31,7 +31,6 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .vm-inner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.35s ease; background: transparent; }
 .vm-inner video.ready { opacity: 1; }
 .vm-ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 22px; }
-.vm-speaker { position: absolute; top: 1px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 1; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6)); pointer-events: none; }
 .vm-count { position: absolute; right: -3px; bottom: 4px; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; background: #ff3b30; color: #fff; font-size: 11px; font-weight: 700; line-height: 19px; text-align: center; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.4); pointer-events: none; }
 .video-marker .marker-label { bottom: -15px; }
 
@@ -53,12 +52,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .detail-rowtext { font-size: 15px; color: #111; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-rowtext .dr-name { font-weight: 600; }
 .detail-rowtext .dr-date { color: #999; }
-/* Mode toggle: a header pinned to the top-right of the cheers list — Sequence (1->2->3->1) vs Loop
-   (replay one clip). Sticky so it stays put while the list scrolls underneath. */
+/* Loop toggle: a single button pinned to the top-right of the cheers list. Off by default (the
+   player auto-advances newest -> oldest); when active it replays the current clip. Sticky so it
+   stays put while the list scrolls underneath. */
 #detail-controls { position: sticky; top: 0; z-index: 1; display: flex; justify-content: flex-end; padding: 8px 14px 6px; background: #fff; }
-.dm-toggle { display: inline-flex; gap: 2px; background: #eef0f3; border-radius: 999px; padding: 3px; }
-.dm-btn { border: none; background: transparent; color: #666; font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 6px 12px; border-radius: 999px; cursor: pointer; line-height: 1; white-space: nowrap; }
-.dm-btn.active { background: #fff; color: #111; box-shadow: 0 1px 2px rgba(0,0,0,0.18); }
+.dm-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
+.dm-btn svg { width: 18px; height: 18px; display: block; }
+.dm-btn.active { background: #ff3b30; color: #fff; }
 
 /* Persistent "Play" button: opens the detail player with every video currently in view, newest -> oldest. */
 #play-all {
@@ -142,10 +142,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet">
     <div id="detail-controls">
-      <div class="dm-toggle">
-        <button id="mode-sequence" class="dm-btn active" type="button">⏭ Sequence</button>
-        <button id="mode-loop" class="dm-btn" type="button">🔁 Loop</button>
-      </div>
+      <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+      </button>
     </div>
     <div id="detail-list"></div>
   </div>
@@ -161,19 +160,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=5",
-    "/js/color.js": "/js/color.js?v=5",
-    "/js/config.js": "/js/config.js?v=5",
-    "/js/detail.js": "/js/detail.js?v=5",
-    "/js/filters.js": "/js/filters.js?v=5",
-    "/js/location-share.js": "/js/location-share.js?v=5",
-    "/js/markers.js": "/js/markers.js?v=5",
-    "/js/state.js": "/js/state.js?v=5",
-    "/js/util.js": "/js/util.js?v=5",
-    "/js/video.js": "/js/video.js?v=5"
+    "/js/api.js": "/js/api.js?v=6",
+    "/js/color.js": "/js/color.js?v=6",
+    "/js/config.js": "/js/config.js?v=6",
+    "/js/detail.js": "/js/detail.js?v=6",
+    "/js/filters.js": "/js/filters.js?v=6",
+    "/js/location-share.js": "/js/location-share.js?v=6",
+    "/js/markers.js": "/js/markers.js?v=6",
+    "/js/state.js": "/js/state.js?v=6",
+    "/js/util.js": "/js/util.js?v=6",
+    "/js/video.js": "/js/video.js?v=6"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=5"></script>
+<script type="module" src="/js/main.js?v=6"></script>
 </body>
 </html>

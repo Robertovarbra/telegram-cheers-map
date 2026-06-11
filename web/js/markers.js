@@ -136,7 +136,6 @@ function addVideoMarker(lat, lng, pins) {
             '<div class="vm-inner">' +
               '<div class="vm-ph" style="background:' + esc(c) + '">' + placeholderGlyph(top) + '</div>' +
               '<video class="marker-video" muted loop playsinline preload="none"></video>' +
-              '<span class="vm-speaker">🔊</span>' +
             '</div>' +
           '</div>' + count + label,
     iconSize: [56, 56],
