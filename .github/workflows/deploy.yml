@@ -1,0 +1,43 @@
+name: Deploy to Raspberry Pi
+
+on:
+  push:
+    branches: [main, dev/che-19-deploy-desde-github-actions]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conectar a Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Ejecutar deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.TAILSCALE_IP }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            bash ~/telegram-cheers-map/scripts/deploy.sh
+
+      - name: Verificar servicio
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.TAILSCALE_IP }}
+          username: ${{ secrets.PI_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            sleep 3
+            if systemctl is-active --quiet cheers-bot; then
+              echo "Servicio activo"
+            else
+              echo "ERROR: servicio inactivo"
+              exit 1
+            fi
