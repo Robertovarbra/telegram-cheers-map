@@ -25,7 +25,20 @@ jobs:
           username: ${{ secrets.PI_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            bash ~/telegram-cheers-map/scripts/deploy.sh
+            set -e
+            echo "=== Deploy: telegram-cheers-map ==="
+            echo "[1/4] Actualizando código..."
+            cd ~/telegram-cheers-map
+            git fetch origin main
+            git reset --hard origin/main
+            echo "[2/4] Instalando dependencias..."
+            export PATH="$HOME/.local/bin:$PATH"
+            uv sync --frozen --no-dev
+            echo "[3/4] Ejecutando lint..."
+            uv run ruff check .
+            echo "[4/4] Reiniciando servicio..."
+            sudo systemctl restart cheers-bot
+            echo "=== Deploy completado ==="
 
       - name: Verificar servicio
         uses: appleboy/ssh-action@v1.2.0
