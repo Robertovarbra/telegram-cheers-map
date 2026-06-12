@@ -154,11 +154,23 @@ Secrets: `BOT_TOKEN` is never committed — `.env` in dev (config warns when loa
 
 ## Deployment
 
-Runs on a Raspberry Pi under systemd (`Type=notify` with `WatchdogSec=30`) behind a Cloudflare Tunnel. `main.py` sends `READY=1` and a `WATCHDOG=1` heartbeat every 15s over `$NOTIFY_SOCKET` (see `_systemd_notify` / `_watchdog_loop`). In production `BOT_TOKEN` lives in a systemd `EnvironmentFile`, not `.env`. `scripts/backup.sh` gzips the DB and pushes to Cloudflare R2 via rclone. Full setup steps are in `README.md` (in Spanish).
+Runs on a Raspberry Pi under systemd (`Type=notify` with `WatchdogSec=30`) behind a Cloudflare Tunnel. `main.py` sends `READY=1` and a `WATCHDOG=1` heartbeat every 15s over `$NOTIFY_SOCKET` (see `_systemd_notify` / `_watchdog_loop`). In production `BOT_TOKEN` lives in a systemd `EnvironmentFile`, not `.env`. `scripts/backup.sh` gzips the DB and pushes to Cloudflare R2 via rclone.
+
+### CI/CD pipeline
+
+Deploys are automated via **GitHub Actions + Tailscale**. The workflow (`.github/workflows/deploy.yml`) is triggered on merge to `main` or manually via workflow_dispatch:
+
+1. **Tailscale**: the GitHub runner joins the tailnet using an OAuth client (`tag:ci`)
+2. **SSH**: connects to the Pi via its Tailscale IP using a dedicated SSH key
+3. **`scripts/deploy.sh`**: executes `git fetch && git reset --hard origin/main`, `uv sync --frozen --no-dev`, `ruff check .`, and `sudo systemctl restart cheers-bot`
+
+No SSH access to the Pi is required for routine deploys. Full setup steps are in `README.md` (in Spanish).
+
+**Key infrastructure**: `TAILSCALE_IP`, `PI_USER`, `SSH_PRIVATE_KEY`, `TS_OAUTH_CLIENT_ID`, and `TS_OAUTH_SECRET` are stored as GitHub Actions secrets.
 
 ## Issue tracking
 
-Issues and improvements are tracked in **Linear** (issue keys use the `CHE-` prefix, e.g. `CHE-5`), not in this repo. The numbered list (1–51) near the top of `README.md` is **legacy** — kept only for the design intent it records behind existing code; it's no longer maintained, so don't treat it as the live backlog.
+Issues and improvements are tracked in **Linear** (issue keys use the `CHE-` prefix, e.g. `CHE-5`), not in this repo.
 
 ## Claude Code Behavior Rules
 
