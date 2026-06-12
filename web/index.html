@@ -52,11 +52,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .detail-rowtext { font-size: 15px; color: #111; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-rowtext .dr-name { font-weight: 600; }
 .detail-rowtext .dr-date { color: #999; }
-/* Loop toggle: a single button pinned to the top-right of the cheers list. Off by default (the
-   player auto-advances newest -> oldest); when active it replays the current clip. Sticky so it
-   stays put while the list scrolls underneath. */
-#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; justify-content: flex-end; padding: 8px 14px 6px; background: #fff; }
-.dm-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
+/* Detail controls: centered counter with framing lines, loop button pinned right. */
+#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 8px 14px 6px; background: #fff; }
+.detail-count-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.detail-line { display: block; width: 24px; height: 1px; background: #ccc; flex-shrink: 0; }
+.detail-count { font-size: 13px; color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dm-btn { position: absolute; right: 14px; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
 .dm-btn svg { width: 18px; height: 18px; display: block; }
 .dm-btn.active { background: #ff3b30; color: #fff; }
 
@@ -142,6 +143,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet">
     <div id="detail-controls">
+      <div id="detail-count-wrap" class="detail-count-wrap">
+        <span class="detail-line"></span>
+        <span id="detail-count" class="detail-count"></span>
+        <span class="detail-line"></span>
+      </div>
       <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
       </button>
@@ -160,19 +166,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=6",
-    "/js/color.js": "/js/color.js?v=6",
-    "/js/config.js": "/js/config.js?v=6",
-    "/js/detail.js": "/js/detail.js?v=6",
-    "/js/filters.js": "/js/filters.js?v=6",
-    "/js/location-share.js": "/js/location-share.js?v=6",
-    "/js/markers.js": "/js/markers.js?v=6",
-    "/js/state.js": "/js/state.js?v=6",
-    "/js/util.js": "/js/util.js?v=6",
-    "/js/video.js": "/js/video.js?v=6"
+    "/js/api.js": "/js/api.js?v=7",
+    "/js/color.js": "/js/color.js?v=7",
+    "/js/config.js": "/js/config.js?v=7",
+    "/js/detail.js": "/js/detail.js?v=7",
+    "/js/filters.js": "/js/filters.js?v=7",
+    "/js/location-share.js": "/js/location-share.js?v=7",
+    "/js/markers.js": "/js/markers.js?v=7",
+    "/js/state.js": "/js/state.js?v=7",
+    "/js/util.js": "/js/util.js?v=7",
+    "/js/video.js": "/js/video.js?v=7"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=6"></script>
+<script type="module" src="/js/main.js?v=7"></script>
 </body>
 </html>

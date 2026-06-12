@@ -60,6 +60,7 @@ export function openDetail(pins, idx) {
     '</div>';
   });
   list.innerHTML = lh;
+  document.getElementById('detail-count').textContent = pins.length + ' videos';
   // Only stream the first few thumbnails (a spot can accumulate many cheers over time); the rest
   // keep their placeholder and still load the big player when tapped.
   var thumbs = list.querySelectorAll('video[data-file-id]');
@@ -108,6 +109,7 @@ function closeDetail() {
   overlay.querySelectorAll('video').forEach(teardownVideo);
   document.getElementById('detail-big').innerHTML = '';
   document.getElementById('detail-list').innerHTML = '';
+  document.getElementById('detail-count').textContent = '';
   state.detailPins = null;
   loopMode = false;
   updateVideoPlayback();  // resume the map previews
