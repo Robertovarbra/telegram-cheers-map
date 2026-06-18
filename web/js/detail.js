@@ -60,7 +60,7 @@ export function openDetail(pins, idx) {
     '</div>';
   });
   list.innerHTML = lh;
-  document.getElementById('detail-count').textContent = pins.length + ' videos';
+  document.getElementById('detail-count').textContent = pins.length + ' ' + (pins.length === 1 ? 'video' : 'videos');
   // Only stream the first few thumbnails (a spot can accumulate many cheers over time); the rest
   // keep their placeholder and still load the big player when tapped.
   var thumbs = list.querySelectorAll('video[data-file-id]');
