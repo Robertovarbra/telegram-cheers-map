@@ -11,6 +11,7 @@ let detailIdx = 0;     // which row in the open detail list is selected
 // (wrapping); when ON it replays the current clip. Always starts OFF when the player opens; the
 // loop button in the top bar toggles it.
 let loopMode = false;
+let detailIo = null;  // IntersectionObserver for lazy-loading thumbnails
 
 // Sync the loop button's active state and the playing <video>'s loop flag to the current mode.
 function applyLoopMode() {
@@ -60,17 +61,39 @@ export function openDetail(pins, idx) {
     '</div>';
   });
   list.innerHTML = lh;
-  document.getElementById('detail-count').textContent = pins.length + ' videos';
-  // Only stream the first few thumbnails (a spot can accumulate many cheers over time); the rest
-  // keep their placeholder and still load the big player when tapped.
+  document.getElementById('detail-count').textContent = pins.length + ' ' + (pins.length === 1 ? 'video' : 'videos');
   var thumbs = list.querySelectorAll('video[data-file-id]');
+  // Load the first MAX_CONCURRENT_VIDEOS thumbnails immediately; lazy-load the rest on scroll.
+  if (detailIo) detailIo.disconnect();
+  var loadedCount = 0;
   for (var ti = 0; ti < thumbs.length && ti < MAX_CONCURRENT_VIDEOS; ti++) {
     (function (v) {
       v.src = videoUrl(v.dataset.fileId);
+      loadedCount++;
       v.addEventListener('loadeddata', function () { v.classList.add('ready'); });
       var r = v.play(); if (r && r.catch) r.catch(function () {});
     })(thumbs[ti]);
   }
+  // Observe all thumbnails via Intersection Observer: off-screen ones release their slot,
+  // allowing on-screen ones beyond the first 8 to load while respecting the concurrent cap.
+  detailIo = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      var v = entry.target;
+      if (entry.isIntersecting && !v.src) {
+        if (loadedCount < MAX_CONCURRENT_VIDEOS) {
+          v.src = videoUrl(v.dataset.fileId);
+          loadedCount++;
+          v.addEventListener('loadeddata', function () { v.classList.add('ready'); });
+          var r = v.play(); if (r && r.catch) r.catch(function () {});
+        }
+      } else if (!entry.isIntersecting && v.src) {
+        teardownVideo(v);
+        v.classList.remove('ready');
+        loadedCount--;
+      }
+    });
+  }, { root: list.parentElement, threshold: 0.01 });
+  thumbs.forEach(function (v) { detailIo.observe(v); });
   document.getElementById('detail').classList.remove('hidden');
   applyLoopMode();  // reset the toggle highlight to the default before the first clip plays
   selectDetail(idx);
@@ -110,6 +133,7 @@ function closeDetail() {
   document.getElementById('detail-big').innerHTML = '';
   document.getElementById('detail-list').innerHTML = '';
   document.getElementById('detail-count').textContent = '';
+  if (detailIo) { detailIo.disconnect(); detailIo = null; }
   state.detailPins = null;
   loopMode = false;
   updateVideoPlayback();  // resume the map previews
