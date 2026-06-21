@@ -57,6 +57,15 @@ map.on('zoomend', function () { state.skipBoundsFit = true; renderMarkers(); });
 initFilters();
 initDetail();
 
+document.body.addEventListener('click', function (e) {
+  var btn = e.target.closest('#view-all');
+  if (!btn) return;
+  var m = state.map, pins = state.allPins;
+  if (m && pins.length > 0) {
+    m.fitBounds(pins.map(function (p) { return [p.latitude, p.longitude]; }), { padding: [40, 40], maxZoom: 15 });
+  }
+});
+
 fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId), { headers: authHeaders() })
   .then(function(r) {
     if (!r.ok) return { users: [], min_date: null, max_date: null };

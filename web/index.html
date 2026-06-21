@@ -72,6 +72,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 #play-all .pa-glyph { transform: translateX(2px); }  /* optically centre the triangle */
 #play-all.hidden { display: none; }
 
+#view-all {
+  position: absolute; right: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 1000;
+  width: 54px; height: 54px; border-radius: 50%; border: 3px solid #fff;
+  background: #ff3b30; color: #fff; cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; line-height: 1; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+  transition: transform 0.08s ease;
+}
+#view-all:active { transform: scale(0.90); }
+#view-all svg { width: 22px; height: 22px; display: block; pointer-events: none; }
+
 #filter-toggle {
   position: absolute; top: 10px; right: 10px; z-index: 1000;
   width: 36px; height: 36px; border-radius: 6px; border: 2px solid rgba(0,0,0,0.2);
@@ -111,6 +122,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <body>
 <div id="map"></div>
 <button id="play-all" title="Play videos in view" aria-label="Play videos in view"><span class="pa-glyph">▶</span></button>
+<button id="view-all" title="Show all cheers" aria-label="Show all cheers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7V2h6M17 2h5v5M17 22h5v-5M8 22H2v-5M2 2l6 6M22 2l-6 6M22 22l-6-6M2 22l6-6"/></svg></button>
 <div id="filter-toggle" title="Toggle filters">🔽</div>
 <div id="filter-panel" class="hidden">
   <div class="filter-section">
@@ -166,19 +178,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=7",
-    "/js/color.js": "/js/color.js?v=7",
-    "/js/config.js": "/js/config.js?v=7",
-    "/js/detail.js": "/js/detail.js?v=7",
-    "/js/filters.js": "/js/filters.js?v=7",
-    "/js/location-share.js": "/js/location-share.js?v=7",
-    "/js/markers.js": "/js/markers.js?v=7",
-    "/js/state.js": "/js/state.js?v=7",
-    "/js/util.js": "/js/util.js?v=7",
-    "/js/video.js": "/js/video.js?v=7"
+    "/js/api.js": "/js/api.js?v=9",
+    "/js/color.js": "/js/color.js?v=9",
+    "/js/config.js": "/js/config.js?v=9",
+    "/js/detail.js": "/js/detail.js?v=9",
+    "/js/filters.js": "/js/filters.js?v=9",
+    "/js/location-share.js": "/js/location-share.js?v=9",
+    "/js/markers.js": "/js/markers.js?v=9",
+    "/js/state.js": "/js/state.js?v=9",
+    "/js/util.js": "/js/util.js?v=9",
+    "/js/video.js": "/js/video.js?v=9"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=7"></script>
+<script type="module" src="/js/main.js?v=9"></script>
 </body>
 </html>
