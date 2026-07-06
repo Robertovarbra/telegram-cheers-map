@@ -52,6 +52,7 @@ function getServerFilterParams() {
   if (dateTo) params.date_to = dateTo;
   var locText = document.getElementById('filter-location').value.trim();
   if (locText) params.q = locText;
+  if (state.selectedTripId !== null) params.trip_id = state.selectedTripId;
   return Object.keys(params).length ? params : null;
 }
 
@@ -63,6 +64,7 @@ export function loadPins(page, filterParams) {
     if (filterParams.date_from) url += '&date_from=' + encodeURIComponent(filterParams.date_from);
     if (filterParams.date_to) url += '&date_to=' + encodeURIComponent(filterParams.date_to);
     if (filterParams.q) url += '&q=' + encodeURIComponent(filterParams.q);
+    if (filterParams.trip_id) url += '&trip_id=' + encodeURIComponent(filterParams.trip_id);
   }
   document.getElementById('filter-count').innerHTML = '<span class="spinner"></span> Loading...';
   fetch(url, { headers: authHeaders() })
@@ -103,7 +105,38 @@ function onMapMove() {
   scheduleRender();
 }
 
+// Trip chips: single-select — tapping a chip filters the map to that trip (server-side), tapping
+// it again clears the filter. The open trip (no closed_at) gets a live dot.
+function renderTripChips() {
+  var wrap = document.getElementById('trip-filters');
+  var section = document.getElementById('trip-section');
+  if (!state.trips.length) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  var html = '';
+  state.trips.forEach(function(t) {
+    var cls = 'trip-chip' + (t.id === state.selectedTripId ? ' active' : '');
+    var live = t.closed_at ? '' : '<span class="trip-live"></span>';
+    html += '<span class="' + cls + '" data-trip-id="' + t.id + '">' + live + esc(t.name) +
+      ' <span class="trip-count">' + t.pin_count + '</span></span>';
+  });
+  wrap.innerHTML = html;
+}
+
 export function populateFilters(meta) {
+  state.trips = meta.trips || [];
+  renderTripChips();
+  document.getElementById('trip-filters').addEventListener('click', function(e) {
+    var chip = e.target.closest('.trip-chip');
+    if (!chip) return;
+    var id = parseInt(chip.dataset.tripId, 10);
+    state.selectedTripId = state.selectedTripId === id ? null : id;
+    renderTripChips();
+    scheduleRender();
+  });
+
   var sorted = meta.users.sort(function(a, b) { return a.user_name.localeCompare(b.user_name); });
   var html = '';
   sorted.forEach(function(u) {

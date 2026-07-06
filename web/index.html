@@ -55,7 +55,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 /* Loop toggle: a single button pinned to the top-right of the cheers list. Off by default (the
    player auto-advances newest -> oldest); when active it replays the current clip. Sticky so it
    stays put while the list scrolls underneath. */
-#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; justify-content: flex-end; padding: 8px 14px 6px; background: #fff; }
+#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 14px 6px; background: #fff; }
+/* Retro-tag: move the selected cheers into (or out of) a trip. Hidden when the chat has no trips. */
+#pin-trip-select { max-width: 46vw; font-size: 12px; color: #444; border: 1px solid #ddd; border-radius: 8px; padding: 5px 8px; background: #eef0f3; }
+#pin-trip-select.hidden { display: none; }
 .dm-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
 .dm-btn svg { width: 18px; height: 18px; display: block; }
 .dm-btn.active { background: #ff3b30; color: #fff; }
@@ -103,6 +106,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .filter-action.all { color: #3498db; }
 .filter-action.none { color: #888; }
 .filter-input { width: 100%; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; padding: 3px 5px; margin-bottom: 2px; }
+/* Trip chips: single-select filter; the open trip carries a green "live" dot. */
+#trip-filters { display: flex; flex-wrap: wrap; gap: 4px; max-height: 76px; overflow-y: auto; }
+.trip-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 12px; background: #eef0f3; color: #333; font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; }
+.trip-chip.active { background: #3498db; color: #fff; }
+.trip-chip .trip-count { font-size: 10px; opacity: 0.65; }
+.trip-live { width: 7px; height: 7px; border-radius: 50%; background: #2ecc71; flex-shrink: 0; }
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #ccc; border-top-color: #888; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 4px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
@@ -112,6 +121,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <button id="play-all" title="Play videos in view" aria-label="Play videos in view"><span class="pa-glyph">▶</span></button>
 <div id="filter-toggle" title="Toggle filters">🔽</div>
 <div id="filter-panel" class="hidden">
+  <div class="filter-section" id="trip-section" style="display:none;">
+    <h4>Trips</h4>
+    <div id="trip-filters"></div>
+  </div>
   <div class="filter-section">
     <h4>Users <span class="filter-action all filter-select-all">All</span> <span class="filter-action none filter-select-none">None</span></h4>
     <div id="user-filters"></div>
@@ -142,6 +155,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet">
     <div id="detail-controls">
+      <select id="pin-trip-select" title="Assign this cheers to a trip" aria-label="Assign this cheers to a trip"></select>
       <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
       </button>
@@ -160,19 +174,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=6",
-    "/js/color.js": "/js/color.js?v=6",
-    "/js/config.js": "/js/config.js?v=6",
-    "/js/detail.js": "/js/detail.js?v=6",
-    "/js/filters.js": "/js/filters.js?v=6",
-    "/js/location-share.js": "/js/location-share.js?v=6",
-    "/js/markers.js": "/js/markers.js?v=6",
-    "/js/state.js": "/js/state.js?v=6",
-    "/js/util.js": "/js/util.js?v=6",
-    "/js/video.js": "/js/video.js?v=6"
+    "/js/api.js": "/js/api.js?v=7",
+    "/js/color.js": "/js/color.js?v=7",
+    "/js/config.js": "/js/config.js?v=7",
+    "/js/detail.js": "/js/detail.js?v=7",
+    "/js/filters.js": "/js/filters.js?v=7",
+    "/js/location-share.js": "/js/location-share.js?v=7",
+    "/js/markers.js": "/js/markers.js?v=7",
+    "/js/state.js": "/js/state.js?v=7",
+    "/js/util.js": "/js/util.js?v=7",
+    "/js/video.js": "/js/video.js?v=7"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=6"></script>
+<script type="module" src="/js/main.js?v=7"></script>
 </body>
 </html>

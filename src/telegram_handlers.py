@@ -6,7 +6,27 @@ from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
 from config import BOT_USERNAME, logger
-from database import add_pin, delete_chat_pins, get_all_chat_ids, get_chat_setting, get_pin, pop_pending_pin, set_chat_setting, set_pending_pin, set_user_pref
+from database import (
+    add_pin,
+    close_trip,
+    create_trip,
+    delete_chat_pins,
+    get_all_chat_ids,
+    get_chat_setting,
+    get_chat_trip_users,
+    get_open_trip_for_member,
+    get_open_trips,
+    get_pin,
+    get_pins_meta,
+    get_trip,
+    get_trip_members,
+    pop_pending_pin,
+    set_chat_setting,
+    set_pending_pin,
+    set_trip_checklist_msg,
+    set_user_pref,
+    toggle_trip_member,
+)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -160,8 +180,11 @@ async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def handle_pref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     data = query.data
+    if data.startswith(("trip_", "tripend_")):
+        await _handle_trip_callback(query, context)  # answers the query itself (custom toasts)
+        return
+    await query.answer()
     user_id = query.from_user.id
 
     chat_id = query.message.chat_id
@@ -183,6 +206,147 @@ async def handle_pref_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.delete_message(chat_id, message_id)
     except Exception as e:
         logger.warning("Could not edit preference message: %s", e)
+
+
+def _trip_keyboard(trip_id, chat_id):
+    """Checklist keyboard for the trip message: one toggle button per known user — pin-posters,
+    anyone who ever joined a trip in this chat, and current members — checked for current members,
+    plus an End-trip row for the creator."""
+    members = {m["user_id"]: m["user_name"] for m in get_trip_members(trip_id)}
+    known = {u["user_id"]: u["user_name"] for u in get_pins_meta(chat_id)["users"]}
+    known.update({u["user_id"]: u["user_name"] for u in get_chat_trip_users(chat_id)})  # joiners who never pinned keep their row after leaving
+    known.update(members)
+    kb = []
+    for user_id, user_name in sorted(known.items(), key=lambda kv: kv[1].lower()):
+        mark = "✅" if user_id in members else "⬜"
+        kb.append([InlineKeyboardButton(f"{mark} {user_name}", callback_data=f"trip_{trip_id}_{user_id}")])
+    kb.append([InlineKeyboardButton("🏁 End trip", callback_data=f"tripend_{trip_id}")])
+    return InlineKeyboardMarkup(kb)
+
+
+def _trip_text(trip):
+    return f"🍻 Trip: {trip['name']}\nWho's here? Tap your name to toggle — members' cheers get tagged automatically."
+
+
+async def _refresh_checklists(bot, chat_id, trips) -> None:
+    """Best-effort: re-render the checklist keyboards of trips someone was just moved off, so a
+    stale ✅ doesn't keep claiming them."""
+    for t in trips:
+        if not t.get("checklist_msg_id"):
+            continue
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=t["checklist_msg_id"], reply_markup=_trip_keyboard(t["id"], chat_id))
+        except Exception as e:
+            logger.warning("Could not refresh checklist for trip %s: %s", t["id"], e)
+
+
+async def trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("Trips only work in groups.")
+        return
+
+    user = update.message.from_user
+    args = context.args or []
+    open_trips = get_open_trips(chat.id)
+
+    if not args:
+        if open_trips:
+            lines = []
+            for t in open_trips:
+                names = ", ".join(m["user_name"] for m in get_trip_members(t["id"])) or "nobody yet"
+                lines.append(f"🍻 {t['name']} — {names}")
+            await update.message.reply_text("Open trips:\n" + "\n".join(lines) + "\n\nStart another with /trip <name>, or finish one with /trip end <name>.")
+        else:
+            await update.message.reply_text("No open trip. Start one with /trip <name> — e.g. /trip Lisboa 🇵🇹")
+        return
+
+    if args[0].lower() == "end":
+        end_name = " ".join(args[1:]).strip()
+        if not open_trips:
+            await update.message.reply_text("No open trip to end.")
+            return
+        if end_name:
+            target = next((t for t in open_trips if t["name"].casefold() == end_name.casefold()), None)
+            if not target:
+                await update.message.reply_text(f"No open trip named '{end_name}'. Open trips: " + ", ".join(t["name"] for t in open_trips))
+                return
+        elif len(open_trips) == 1:
+            target = open_trips[0]
+        else:
+            await update.message.reply_text("Several trips are open: " + ", ".join(t["name"] for t in open_trips) + "\nUse /trip end <name>.")
+            return
+        close_trip(target["id"])
+        await update.message.reply_text(f"🏁 Trip '{target['name']}' ended. New cheers won't be tagged to it.")
+        return
+
+    name = " ".join(args).strip()
+    if len(name) > 60:
+        await update.message.reply_text("That trip name is too long (max 60 characters).")
+        return
+    if any(t["name"].casefold() == name.casefold() for t in open_trips):
+        await update.message.reply_text(f"A trip named '{name}' is already open. End it first, or pick another name.")
+        return
+
+    user_name = user.full_name or user.username or str(user.id)
+    trip_id, moved_from = create_trip(chat.id, name, user.id, user_name)
+    trip = {"id": trip_id, "name": name}
+    msg = await update.message.reply_text(_trip_text(trip), reply_markup=_trip_keyboard(trip_id, chat.id))
+    set_trip_checklist_msg(trip_id, msg.message_id)
+    await _refresh_checklists(context.bot, chat.id, moved_from)
+
+
+async def _handle_trip_callback(query, context) -> None:
+    data = query.data
+    user = query.from_user
+    chat_id = query.message.chat_id
+
+    if data.startswith("tripend_"):
+        trip = get_trip(int(data[8:]))
+        if not trip or trip["chat_id"] != chat_id:
+            return
+        if user.id != trip["created_by"]:
+            await query.answer("Only the trip creator can end it.", show_alert=True)
+            return
+        if trip["closed_at"] is None:
+            close_trip(trip["id"])
+        await query.answer("Trip ended.")
+        try:
+            await query.edit_message_text(f"🏁 Trip '{trip['name']}' ended.")
+        except Exception as e:
+            logger.warning("Could not edit trip message: %s", e)
+        return
+
+    trip_id_raw, _, target_raw = data[5:].partition("_")
+    trip = get_trip(int(trip_id_raw))
+    target_id = int(target_raw)
+    if not trip or trip["chat_id"] != chat_id:
+        return
+    if trip["closed_at"] is not None:
+        await query.answer("This trip has ended.", show_alert=True)
+        return
+    # You toggle yourself; only the trip creator can toggle anyone.
+    if user.id != target_id and user.id != trip["created_by"]:
+        await query.answer("You can only toggle yourself.", show_alert=True)
+        return
+
+    if user.id == target_id:
+        target_name = user.full_name or user.username or str(user.id)
+    else:
+        target_name = next((m["user_name"] for m in get_trip_members(trip["id"]) if m["user_id"] == target_id), None)
+        if target_name is None:
+            target_name = next((u["user_name"] for u in get_pins_meta(chat_id)["users"] if u["user_id"] == target_id), str(target_id))
+
+    member, moved_from = toggle_trip_member(trip["id"], target_id, target_name)
+    if member and moved_from:
+        await query.answer(f"{target_name} is on '{trip['name']}' (moved off '{moved_from[0]['name']}').")
+    else:
+        await query.answer(f"{target_name} is {'on' if member else 'off'} the trip.")
+    try:
+        await query.edit_message_reply_markup(reply_markup=_trip_keyboard(trip["id"], chat_id))
+    except Exception as e:
+        logger.warning("Could not update trip keyboard: %s", e)
+    await _refresh_checklists(context.bot, chat_id, moved_from)
 
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -293,6 +457,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     city, country, country_code = await reverse_geocode(location.latitude, location.longitude)
 
+    # Tag with the open trip this user is on (membership is the gate; None -> untagged).
+    trip = get_open_trip_for_member(chat_id, user.id)
+
     add_pin(
         chat_id=chat_id,
         message_id=pending["message_id"],
@@ -305,12 +472,14 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         city=city,
         country=country,
         country_code=country_code,
+        trip_id=trip["id"] if trip else None,
     )
 
     location_msg_id = update.effective_message.message_id
     prompt_msg_id = pending.get("prompt_msg_id")
 
-    confirmation = await context.bot.send_message(chat_id, "Pinned! Use /map to view the cheers map.")
+    confirm_text = f"Pinned to trip '{trip['name']}'! Use /map to view the cheers map." if trip else "Pinned! Use /map to view the cheers map."
+    confirmation = await context.bot.send_message(chat_id, confirm_text)
 
     await asyncio.sleep(3)
 

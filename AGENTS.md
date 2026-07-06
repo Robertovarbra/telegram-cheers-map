@@ -84,6 +84,20 @@ python3 /tmp/cheers-map-test/server.py &     # or run_in_background
 - "Browser already running" from the MCP means a stale **MCP-owned** Chrome — it runs its own dedicated profile (`chrome-devtools-mcp/chrome-profile`), **not** your personal Chrome. Kill the process that has `--user-data-dir=...chrome-devtools-mcp...` and no `--type=`; never the user's Chrome.
 - Clean up when done: `rm -rf /tmp/cheers-map-test`.
 
+### Driving the REAL backend, auth included (no Telegram account needed either)
+
+The mock harness above skips `auth.py` and all of `web_handlers.py`. When a change touches the API or auth path, run the **real** app instead: real routes, real HMAC verification, real handlers, real SQLite. The trick is that `verify_init_data` checks the signature against whatever `BOT_TOKEN` you set — so a locally-set fake token lets you **forge valid `initData`**. Verified working for the trips feature; rebuild it the same way (throwaway launcher script, run from `src/`, never committed):
+
+1. **Launcher shape** — set `BOT_TOKEN` (any string) *before* importing `config`; then import the real modules and patch the seams:
+   - `database.DB_PATH = <tempdir>/e2e.db` (module attribute — `config.DB_PATH` was already bound at import), then `init_db()` + `migrate_db()` and seed pins/trips/pending rows directly.
+   - `web_handlers.VIDEO_CACHE_DIR = <tempdir>/video_cache`, `web_handlers.reverse_geocode = <async fake>` (keeps Nominatim out).
+   - Build a `web.Application`, register the same routes as `main.py`, and set `app["bot"]` to a stub: `get_chat_member` returns `.status = "member"` (return `"left"` for one magic chat id to probe 403s), `get_file` returns `.file_path = "http://127.0.0.1:<port>/clip-src.mp4"` pointing at a static route on the same app — this exercises the real video proxy (Range, streaming, disk cache) end to end.
+2. **Forge initData** (must match `auth.py`): `fields = {auth_date, query_id, user: json.dumps({...})}`; data-check-string = sorted `k=v` lines joined by `\n`; `secret = HMAC_SHA256(key=b"WebAppData", msg=BOT_TOKEN)`; `fields["hash"] = HMAC_SHA256(key=secret, msg=dcs).hexdigest()`; result is `urlencode(fields)`. Use it in curl via `Authorization: tma <initData>`.
+3. **Get it into the browser** through Telegram's own mechanism — no stubbing `window.Telegram`: navigate to `http://127.0.0.1:<port>/?chat_id=<id>#tgWebAppData=<urlquote(initData, safe='')>&tgWebAppVersion=8.0&tgWebAppPlatform=web`. The CDN `telegram-web-app.js` parses the hash and populates `initData`, so the frontend's real `authHeaders()` path runs against the real verifier.
+4. Assert **through the surface and below it**: curl the auth probes (no auth / tampered hash / non-member chat → 401/401/403), drive the UI via MCP Chrome, then check writes landed with `sqlite3 <tempdir>/e2e.db`.
+
+Telegram *handlers* (`/trip` etc.) still can't be reached this way — that layer needs faked `Update`/`CallbackQuery` objects calling the handler functions directly (real handlers + real DB, fake transport), which is weaker evidence; say so when reporting.
+
 ## Config / running
 
 `src/config.py` loads env vars from `.env` (via `python-dotenv`) or real env vars, which take priority and are preferred in production. Two carry non-obvious consequences: a missing `BOT_TOKEN` aborts startup with `SystemExit`, and a missing `BOT_USERNAME` *silently* breaks Mini App deep links — `/map` emits broken `t.me/{bot}/map?startapp=...` links rather than erroring. The remaining vars and their defaults live in `.env.example`.

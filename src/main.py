@@ -26,11 +26,13 @@ from telegram_handlers import (
     handle_video,
     map_command,
     start,
+    trip_command,
 )
 from web_handlers import (
     handle_bot_info,
     handle_chat,
     handle_health,
+    handle_pin_trip,
     handle_pins,
     handle_pins_meta,
     handle_submit_location,
@@ -72,6 +74,7 @@ async def main() -> None:
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_post("/api/submit-location", handle_submit_location)
+    web_app.router.add_post("/api/pin-trip", handle_pin_trip)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
 
     async def index_handler(_request: web.Request) -> web.FileResponse:
@@ -100,6 +103,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("map", map_command))
     application.add_handler(CommandHandler("color", color_command))
     application.add_handler(CommandHandler("emoji", emoji_command))
+    application.add_handler(CommandHandler("trip", trip_command))
     application.add_handler(CallbackQueryHandler(handle_pref_callback))
     application.add_handler(MessageHandler(filters.TEXT, handle_emoji_text))
     application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video))

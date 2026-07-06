@@ -75,6 +75,53 @@ def migrate_db():
         except sqlite3.OperationalError:
             pass
         try:
+            c.execute("ALTER TABLE pins ADD COLUMN trip_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("""
+                CREATE TABLE trips (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    created_by INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    closed_at TEXT,
+                    checklist_msg_id INTEGER
+                )
+            """)
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE trips ADD COLUMN checklist_msg_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("""
+                CREATE TABLE trip_members (
+                    trip_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    user_name TEXT NOT NULL,
+                    PRIMARY KEY (trip_id, user_id)
+                )
+            """)
+        except sqlite3.OperationalError:
+            pass
+        try:
+            # Roster of everyone who has EVER joined a trip in the chat. Never pruned (except on
+            # chat cleanup) so a checklist row survives leaving a trip — otherwise a user who never
+            # posted a pin would lose their toggle button the moment they left, with no way back in.
+            c.execute("""
+                CREATE TABLE chat_trip_users (
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    user_name TEXT NOT NULL,
+                    PRIMARY KEY (chat_id, user_id)
+                )
+            """)
+        except sqlite3.OperationalError:
+            pass
+        try:
             c.execute("""
                 CREATE TABLE pending_pins (
                     chat_id INTEGER NOT NULL,
@@ -232,15 +279,27 @@ def delete_stale_pending_pins(max_age_seconds=86400):
 
 
 def add_pin(
-    chat_id, message_id, user_id, user_name, video_file_id, lat, lng, video_type="video_note", video_link=None, city=None, country=None, country_code=None
+    chat_id,
+    message_id,
+    user_id,
+    user_name,
+    video_file_id,
+    lat,
+    lng,
+    video_type="video_note",
+    video_link=None,
+    city=None,
+    country=None,
+    country_code=None,
+    trip_id=None,
 ):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
         c.execute(
             "INSERT INTO pins (chat_id, message_id, user_id, user_name, video_file_id,"
-            " latitude, longitude, created_at, video_type, video_link, city, country, country_code)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " latitude, longitude, created_at, video_type, video_link, city, country, country_code, trip_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 chat_id,
                 message_id,
@@ -255,9 +314,189 @@ def add_pin(
                 city,
                 country,
                 country_code,
+                trip_id,
             ),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def _exclusive_join(c, chat_id, trip_id, user_id, user_name):
+    """Add the user to a trip, removing them from every *other open* trip in the same chat — you
+    can only physically be in one place, so membership among concurrent trips is exclusive.
+    Returns the trips the user was moved off (so callers can refresh those stale checklists)."""
+    c.execute(
+        "SELECT t.id, t.name, t.checklist_msg_id FROM trips t JOIN trip_members m ON m.trip_id = t.id"
+        " WHERE t.chat_id = ? AND t.closed_at IS NULL AND t.id != ? AND m.user_id = ?",
+        (chat_id, trip_id, user_id),
+    )
+    moved_from = [{"id": r[0], "name": r[1], "checklist_msg_id": r[2]} for r in c.fetchall()]
+    for t in moved_from:
+        c.execute("DELETE FROM trip_members WHERE trip_id = ? AND user_id = ?", (t["id"], user_id))
+    c.execute("INSERT OR REPLACE INTO trip_members (trip_id, user_id, user_name) VALUES (?, ?, ?)", (trip_id, user_id, user_name))
+    c.execute("INSERT OR REPLACE INTO chat_trip_users (chat_id, user_id, user_name) VALUES (?, ?, ?)", (chat_id, user_id, user_name))
+    return moved_from
+
+
+def create_trip(chat_id, name, created_by, creator_name):
+    """Start a new trip. Other open trips keep running (a chat can hold several in parallel); the
+    creator auto-joins, which moves them off any other open trip. Returns (trip_id, moved_from)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        now = datetime.now(timezone.utc).isoformat()
+        c.execute("INSERT INTO trips (chat_id, name, created_by, created_at) VALUES (?, ?, ?, ?)", (chat_id, name, created_by, now))
+        trip_id = c.lastrowid
+        moved_from = _exclusive_join(c, chat_id, trip_id, created_by, creator_name)
+        c.execute("COMMIT")
+        return trip_id, moved_from
+    finally:
+        conn.close()
+
+
+def close_trip(trip_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE trips SET closed_at = ? WHERE id = ? AND closed_at IS NULL", (datetime.now(timezone.utc).isoformat(), trip_id))
+        conn.commit()
+        return c.rowcount > 0
+    finally:
+        conn.close()
+
+
+def set_trip_checklist_msg(trip_id, message_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE trips SET checklist_msg_id = ? WHERE id = ?", (message_id, trip_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_open_trips(chat_id):
+    """All still-open trips for a chat, newest first."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, name, created_by, checklist_msg_id FROM trips WHERE chat_id = ? AND closed_at IS NULL ORDER BY created_at DESC",
+            (chat_id,),
+        )
+        return [{"id": r[0], "name": r[1], "created_by": r[2], "checklist_msg_id": r[3]} for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_open_trip_for_member(chat_id, user_id):
+    """The open trip this user is on, or None — the tagging rule for new pins. Membership among a
+    chat's open trips is kept exclusive by _exclusive_join, so at most one row matches; ORDER BY is
+    a belt-and-braces tiebreak (newest trip wins) for any legacy overlap."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT t.id, t.name FROM trips t JOIN trip_members m ON m.trip_id = t.id"
+            " WHERE t.chat_id = ? AND t.closed_at IS NULL AND m.user_id = ?"
+            " ORDER BY t.created_at DESC LIMIT 1",
+            (chat_id, user_id),
+        )
+        row = c.fetchone()
+        return {"id": row[0], "name": row[1]} if row else None
+    finally:
+        conn.close()
+
+
+def get_trip(trip_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id, chat_id, name, created_by, closed_at FROM trips WHERE id = ?", (trip_id,))
+        row = c.fetchone()
+        return {"id": row[0], "chat_id": row[1], "name": row[2], "created_by": row[3], "closed_at": row[4]} if row else None
+    finally:
+        conn.close()
+
+
+def toggle_trip_member(trip_id, user_id, user_name):
+    """Add the user to the trip if absent (moving them off any other open trip in the chat, see
+    _exclusive_join), remove them if present. Returns (now_member, moved_from)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT 1 FROM trip_members WHERE trip_id = ? AND user_id = ?", (trip_id, user_id))
+        if c.fetchone():
+            c.execute("DELETE FROM trip_members WHERE trip_id = ? AND user_id = ?", (trip_id, user_id))
+            member, moved_from = False, []
+        else:
+            c.execute("SELECT chat_id FROM trips WHERE id = ?", (trip_id,))
+            chat_id = c.fetchone()[0]
+            moved_from = _exclusive_join(c, chat_id, trip_id, user_id, user_name)
+            member = True
+        c.execute("COMMIT")
+        return member, moved_from
+    finally:
+        conn.close()
+
+
+def get_chat_trip_users(chat_id):
+    """Everyone who has ever joined a trip in this chat (see chat_trip_users). Keeps checklist
+    rows stable: leaving a trip must not erase your toggle button."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT user_id, user_name FROM chat_trip_users WHERE chat_id = ?", (chat_id,))
+        return [{"user_id": r[0], "user_name": r[1]} for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_trip_members(trip_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT user_id, user_name FROM trip_members WHERE trip_id = ? ORDER BY user_name", (trip_id,))
+        return [{"user_id": r[0], "user_name": r[1]} for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_trips(chat_id):
+    """All trips for a chat (newest first) with pin counts, for the Mini App filter panel."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT t.id, t.name, t.created_at, t.closed_at, COUNT(p.id)"
+            " FROM trips t LEFT JOIN pins p ON p.trip_id = t.id"
+            " WHERE t.chat_id = ? GROUP BY t.id ORDER BY t.created_at DESC",
+            (chat_id,),
+        )
+        return [{"id": r[0], "name": r[1], "created_at": r[2], "closed_at": r[3], "pin_count": r[4]} for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def set_pin_trip(chat_id, pin_id, trip_id):
+    """Assign a pin to a trip (or clear with trip_id=None). Both the pin and the trip must belong
+    to chat_id — the caller's authorized chat — so a member can never touch another chat's data.
+    Returns True iff the pin was updated."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        if trip_id is not None:
+            c.execute("SELECT 1 FROM trips WHERE id = ? AND chat_id = ?", (trip_id, chat_id))
+            if not c.fetchone():
+                return False
+        c.execute("UPDATE pins SET trip_id = ? WHERE id = ? AND chat_id = ?", (trip_id, pin_id, chat_id))
+        conn.commit()
+        return c.rowcount > 0
     finally:
         conn.close()
 
@@ -275,7 +514,7 @@ def get_pin(chat_id, message_id):
         conn.close()
 
 
-def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_to=None, q=None):
+def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_to=None, q=None, trip_id=None):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
@@ -294,13 +533,16 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
         if q:
             where += " AND (INSTR(LOWER(p.city), LOWER(?)) > 0 OR INSTR(LOWER(p.country), LOWER(?)) > 0 OR INSTR(LOWER(p.country_code), LOWER(?)) > 0)"
             params.extend([q, q, q])
+        if trip_id is not None:
+            where += " AND p.trip_id = ?"
+            params.append(trip_id)
         c.execute("SELECT COUNT(*) FROM pins p " + where, params)
         total = c.fetchone()[0]
         c.execute(
             "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id,"
             " p.latitude, p.longitude, p.created_at, p.video_link,"
             " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''),"
-            " p.city, p.country, p.country_code"
+            " p.city, p.country, p.country_code, p.trip_id"
             " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
             " " + where + " ORDER BY p.created_at DESC"
             " LIMIT ? OFFSET ?",
@@ -327,6 +569,7 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
                     "city": r[11],
                     "country": r[12],
                     "country_code": r[13],
+                    "trip_id": r[14],
                 }
                 for r in rows
             ],
@@ -345,6 +588,9 @@ def delete_chat_pins(chat_id):
         try:
             c.execute("DELETE FROM chat_settings WHERE chat_id = ?", (chat_id,))
             c.execute("DELETE FROM pending_pins WHERE chat_id = ?", (chat_id,))
+            c.execute("DELETE FROM trip_members WHERE trip_id IN (SELECT id FROM trips WHERE chat_id = ?)", (chat_id,))
+            c.execute("DELETE FROM trips WHERE chat_id = ?", (chat_id,))
+            c.execute("DELETE FROM chat_trip_users WHERE chat_id = ?", (chat_id,))
             conn.commit()
         except Exception:
             pass
@@ -388,6 +634,6 @@ def get_pins_meta(chat_id):
         users = [{"user_id": r[0], "user_name": r[1], "pin_emoji": r[2] or None, "pin_color": r[3] or None} for r in c.fetchall()]
         c.execute("SELECT MIN(created_at), MAX(created_at) FROM pins WHERE chat_id = ?", (chat_id,))
         row = c.fetchone()
-        return {"users": users, "min_date": row[0], "max_date": row[1]}
+        return {"users": users, "min_date": row[0], "max_date": row[1], "trips": get_trips(chat_id)}
     finally:
         conn.close()

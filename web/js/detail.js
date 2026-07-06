@@ -2,7 +2,7 @@
 import { state } from './state.js';
 import { esc, relTime, placeholderGlyph, byNewest } from './util.js';
 import { getColor } from './color.js';
-import { videoUrl } from './api.js';
+import { videoUrl, apiPost } from './api.js';
 import { pauseMarkerVideos, updateVideoPlayback, teardownVideo } from './video.js';
 import { MAX_CONCURRENT_VIDEOS } from './config.js';
 
@@ -75,10 +75,39 @@ export function openDetail(pins, idx) {
   selectDetail(idx);
 }
 
+// Retro-tag control: reflects the selected pin's trip and reassigns it on change. The fallback
+// for cheers the auto-tagging missed (someone who hadn't joined the trip yet). Hidden when the
+// chat has no trips.
+function syncTripSelect(pin) {
+  var sel = document.getElementById('pin-trip-select');
+  if (!state.trips.length) {
+    sel.classList.add('hidden');
+    return;
+  }
+  sel.classList.remove('hidden');
+  var html = '<option value="">No trip</option>';
+  state.trips.forEach(function (t) {
+    html += '<option value="' + t.id + '"' + (t.id === pin.trip_id ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+  });
+  sel.innerHTML = html;
+}
+
+function onTripSelectChange() {
+  if (!state.detailPins || !state.detailPins[detailIdx]) return;
+  var pin = state.detailPins[detailIdx];
+  var tripId = this.value ? parseInt(this.value, 10) : null;
+  var prev = pin.trip_id;
+  pin.trip_id = tripId;  // optimistic; reverted if the API rejects it
+  apiPost('/api/pin-trip', state.chatId, { pin_id: pin.id, trip_id: tripId })
+    .then(function (r) { if (!r.ok) throw new Error('failed ' + r.status); })
+    .catch(function () { pin.trip_id = prev; syncTripSelect(pin); });
+}
+
 function selectDetail(i) {
   if (!state.detailPins || !state.detailPins[i]) return;
   detailIdx = i;
   var p = state.detailPins[i];
+  syncTripSelect(p);
   var big = document.getElementById('detail-big');
   var old = big.querySelector('video');
   if (old) teardownVideo(old);
@@ -117,6 +146,7 @@ function closeDetail() {
 export function initDetail() {
   document.getElementById('play-all').addEventListener('click', playAll);
   document.getElementById('mode-loop').addEventListener('click', toggleLoop);
+  document.getElementById('pin-trip-select').addEventListener('change', onTripSelectChange);
   document.getElementById('detail').addEventListener('click', function (e) {
     // keep open when tapping the video, or the sheet (which holds the list and the mode toggle)
     if (e.target.closest('#detail-big') || e.target.closest('#detail-sheet')) return;

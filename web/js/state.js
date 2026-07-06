@@ -12,4 +12,6 @@ export const state = {
   skipBoundsFit: false,
   videoMarkers: [],   // {video, lat, lng, fileId, pins} per rendered cluster marker on the map
   detailPins: null,   // pins shown in the open detail overlay (null when closed)
+  trips: [],          // {id, name, closed_at, pin_count} from /api/pins-meta, newest first
+  selectedTripId: null,  // trip chip currently selected in the filter panel (null = all)
 };
