@@ -149,17 +149,20 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Trip-name capture (from the /trip -> Start button) takes precedence over the emoji flow.
-    pending_trip = context.user_data.pop("awaiting_trip_name", None)
-    if pending_trip:
+    # user_data is per-user across ALL chats, so only consume it when the reply comes from the same
+    # chat where Start was pressed — otherwise an unrelated message elsewhere (even a DM to the bot)
+    # would be turned into a trip name in the original group.
+    pending_trip = context.user_data.get("awaiting_trip_name")
+    if pending_trip and update.message.chat_id == pending_trip["chat_id"]:
+        context.user_data.pop("awaiting_trip_name", None)
         name = update.message.text.strip()
-        if name.startswith("/"):  # a command, not a name — bail out quietly
-            return
-        await _start_trip(context, pending_trip["chat_id"], update.message.from_user, name)
-        if pending_trip.get("prompt_id"):  # tidy up the "send the trip name" prompt
-            try:
-                await context.bot.delete_message(pending_trip["chat_id"], pending_trip["prompt_id"])
-            except Exception:
-                pass
+        if not name.startswith("/"):  # a command, not a name — cancel quietly
+            await _start_trip(context, pending_trip["chat_id"], update.message.from_user, name)
+            if pending_trip.get("prompt_id"):  # tidy up the "send the trip name" prompt
+                try:
+                    await context.bot.delete_message(pending_trip["chat_id"], pending_trip["prompt_id"])
+                except Exception:
+                    pass
         return
 
     pending = context.user_data.pop("awaiting_emoji", None)
