@@ -200,10 +200,29 @@ function renderRowMarks() {
 function toggleRowSelect(idx) {
   var p = state.detailPins && state.detailPins[idx];
   if (!p) return;
-  if (tripSel.has(p.id)) tripSel.delete(p.id); else tripSel.add(p.id);
+  var adding = !tripSel.has(p.id);
+  if (adding) tripSel.add(p.id); else tripSel.delete(p.id);
   if (!inSelectMode()) targetTripId = undefined;  // deselected the last one -> leave selection mode clean
   renderRowMarks();
   renderTripBar();
+  // Focus the big player on the clip you just picked, so "play what I'm selecting" holds. selectDetail
+  // won't scroll the list while selecting (see its guard), so the list stays put under your finger.
+  if (adding) selectDetail(idx);
+}
+
+// Which clip the big player advances to when the current one ends. Normally the next clip in the
+// list (wrapping). While selecting, it stays within the selected set — looping a lone selection —
+// so tagging never drags playback, and the auto-scroll, through unselected clips.
+function nextPlayIndex(from) {
+  var pins = state.detailPins;
+  if (inSelectMode()) {
+    for (var n = 1; n <= pins.length; n++) {
+      var cand = (from + n) % pins.length;
+      if (tripSel.has(pins[cand].id)) return cand;
+    }
+    return from;  // nothing else selected -> keep looping the current clip
+  }
+  return (from + 1) % pins.length;
 }
 
 function exitSelect() {
@@ -268,7 +287,8 @@ function selectDetail(i) {
   v.addEventListener('ended', function () {
     // Auto-advance hands off to the next clip (wrapping after the oldest). In loop mode v.loop is
     // set, so 'ended' never fires here — but guard on the mode anyway in case it was just toggled.
-    if (!loopMode && state.detailPins) selectDetail((i + 1) % state.detailPins.length);
+    // nextPlayIndex keeps advancement inside the selected set while tagging.
+    if (!loopMode && state.detailPins) selectDetail(nextPlayIndex(i));
   });
   var pr = v.play();
   if (pr && pr.catch) pr.catch(function () { v.muted = true; var r = v.play(); if (r && r.catch) r.catch(function () {}); });
@@ -276,7 +296,9 @@ function selectDetail(i) {
   rows.forEach(function (r) {
     var active = parseInt(r.dataset.idx, 10) === i;
     r.classList.toggle('active', active);
-    if (active && !loopMode) r.scrollIntoView({ block: 'center' });  // keep the playing clip visible in the sheet
+    // Keep the playing clip visible in the sheet — but NOT while selecting, where auto-scrolling the
+    // list would yank rows out from under the user as they tap to (de)select.
+    if (active && !loopMode && !inSelectMode()) r.scrollIntoView({ block: 'center' });
   });
 }
 

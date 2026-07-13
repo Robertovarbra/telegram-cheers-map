@@ -415,9 +415,9 @@ def get_trip(trip_id):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
-        c.execute("SELECT id, chat_id, name, created_by, closed_at FROM trips WHERE id = ?", (trip_id,))
+        c.execute("SELECT id, chat_id, name, created_by, closed_at, checklist_msg_id FROM trips WHERE id = ?", (trip_id,))
         row = c.fetchone()
-        return {"id": row[0], "chat_id": row[1], "name": row[2], "created_by": row[3], "closed_at": row[4]} if row else None
+        return {"id": row[0], "chat_id": row[1], "name": row[2], "created_by": row[3], "closed_at": row[4], "checklist_msg_id": row[5]} if row else None
     finally:
         conn.close()
 
