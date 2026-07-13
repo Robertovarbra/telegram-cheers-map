@@ -127,7 +127,7 @@ A pin requires both a video note and a location, sent as separate messages:
    - **Mini App (one-tap):** the button opens `web/index.html` in share mode; `LocationManager.getLocation()` (Bot API 8.0+) reads the device location and POSTs it to `POST /api/submit-location`, which authorizes the caller, pops the pending row, and calls `add_pin`.
    - **Attachment menu (fallback):** the user sends a location message; `handle_location` pops the pending row (keyed by the *sender's* `(chat_id, user_id)`, which is what enforces "only the original sender completes it"), calls `reverse_geocode`, then `add_pin`.
 
-`request_location` reply-keyboard buttons are private-chat only (they don't fire in groups), which is why the one-tap path routes through the Mini App rather than a native keyboard button. Pending rows are bounded (one per user per chat, overwritten on re-send) and swept on startup via `delete_stale_pending_pins` (24 h TTL) and on chat removal via `delete_chat_pins`. Bot prompt/confirmation messages are auto-deleted after a few seconds (best-effort, errors swallowed).
+`request_location` reply-keyboard buttons are private-chat only (they don't fire in groups), which is why the one-tap path routes through the Mini App rather than a native keyboard button. Pending rows are bounded (one per user per chat, overwritten on re-send) and swept on startup via `delete_stale_pending_pins` (24 h TTL). Bot prompt/confirmation messages are auto-deleted after a few seconds (best-effort, errors swallowed).
 
 ### Videos are never stored — only Telegram `file_id`
 `add_pin` stores the `file_id`. The frontend `<video>` points at `/api/video?file_id=...`, and `handle_video_proxy` resolves the file via `bot.get_file()` then streams it from Telegram's CDN, forwarding the `Range` header (essential for seeking). This is why the web server needs the shared bot instance.
@@ -136,7 +136,7 @@ A pin requires both a video note and a location, sent as separate messages:
 `reverse_geocode` in `telegram_handlers.py` hits the public Nominatim API, guarded by an `asyncio.Lock`, an in-memory LRU-ish cache (max 500 entries), and a `sleep(1)` to respect rate limits. The cache is in-memory only (lost on restart).
 
 ### Chat lifecycle / data cleanup
-When the bot is removed from a chat (`handle_my_chat_member` → LEFT/BANNED), **all that chat's pins are deleted**. On startup, `cleanup_inactive_chats` checks every known chat and purges pins for any the bot can no longer access.
+Pins are **never deleted in real time** when the bot is removed from a chat — this avoids data loss if the removal was accidental. Instead, `cleanup_inactive_chats` runs **only at process startup**: it iterates every known `chat_id` and purges pins for any chat the bot can no longer access. Pins from deleted or left chats persist until the next restart.
 
 ### Mini App + map (`web/index.html`)
 Single static HTML file, vanilla JS + Leaflet from unpkg CDN — **no build step**. The `/map` command opens it as a Telegram Mini App via `t.me/{BOT_USERNAME}/map?startapp=c{chat_id}`. The frontend derives `chat_id` from (in order) `?chat_id=`, `tgWebAppStartParam`, or `Telegram.WebApp.initDataUnsafe.start_param`, parsing the `c{chatId}` format. All dynamic values are escaped via `esc()` (XSS guard). Pins within `GROUP_RADIUS` (10 m) are clustered. Filtering is split: **server-side** (`user_ids`, `date_from`, `date_to`, `q` location) with LIMIT/OFFSET 500 pagination, plus **client-side** ("only in map view" bounds filter, which disables pagination).

@@ -491,28 +491,6 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 pass
 
 
-async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_member = update.my_chat_member
-    if not chat_member:
-        return
-
-    chat = chat_member.chat
-    new_status = chat_member.new_chat_member.status
-    user = chat_member.new_chat_member.user
-    bot_id = context.bot.id
-
-    if user.id != bot_id:
-        return
-
-    if chat.type not in (Chat.GROUP, Chat.SUPERGROUP):
-        return
-
-    if new_status in (ChatMember.LEFT, ChatMember.BANNED):
-        chat_name = chat.title or str(chat.id)
-        deleted = delete_chat_pins(chat.id)
-        logger.info("Bot removed from chat '%s' (id: %s). Deleted %s pin(s) from database.", chat_name, chat.id, deleted)
-
-
 async def cleanup_inactive_chats(bot):
     chat_ids = get_all_chat_ids()
     if not chat_ids:

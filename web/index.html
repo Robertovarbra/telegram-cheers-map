@@ -52,16 +52,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .detail-rowtext { font-size: 15px; color: #111; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-rowtext .dr-name { font-weight: 600; }
 .detail-rowtext .dr-date { color: #999; }
-/* Loop toggle: a single button pinned to the top-right of the cheers list. Off by default (the
-   player auto-advances newest -> oldest); when active it replays the current clip. Sticky so it
-   stays put while the list scrolls underneath. */
-#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 14px 6px; background: #fff; }
+/* Detail controls: centered counter with framing lines, loop button pinned right, reverse pinned left.
+   The trip select (when the chat has trips) sits centered next to the counter. */
+#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 14px 12px; background: #fff; }
+.detail-count-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.detail-line { display: block; width: 24px; height: 1px; background: #ccc; flex-shrink: 0; }
+.detail-count { font-size: 13px; color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* Retro-tag: move the selected cheers into (or out of) a trip. Hidden when the chat has no trips. */
 #pin-trip-select { max-width: 46vw; font-size: 12px; color: #444; border: 1px solid #ddd; border-radius: 8px; padding: 5px 8px; background: #eef0f3; }
 #pin-trip-select.hidden { display: none; }
-.dm-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
+.dm-btn { position: absolute; right: 14px; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
 .dm-btn svg { width: 18px; height: 18px; display: block; }
 .dm-btn.active { background: #ff3b30; color: #fff; }
+#mode-reverse { left: 14px; right: auto; }
 
 /* Persistent "Play" button: opens the detail player with every video currently in view, newest -> oldest. */
 #play-all {
@@ -73,6 +76,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 }
 #play-all .pa-glyph { transform: translateX(2px); }  /* optically centre the triangle */
 #play-all.hidden { display: none; }
+
+#view-all {
+  position: absolute; right: 14px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 1000;
+  width: 54px; height: 54px; border-radius: 50%; border: 3px solid #fff;
+  background: #ff3b30; color: #fff; cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; line-height: 1; box-shadow: 0 3px 10px rgba(0,0,0,0.4);
+  transition: transform 0.08s ease;
+}
+#view-all:active { transform: scale(0.90); }
+#view-all svg { width: 22px; height: 22px; display: block; pointer-events: none; }
 
 #filter-toggle {
   position: absolute; top: 10px; right: 10px; z-index: 1000;
@@ -119,6 +133,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <body>
 <div id="map"></div>
 <button id="play-all" title="Play videos in view" aria-label="Play videos in view"><span class="pa-glyph">▶</span></button>
+<button id="view-all" title="Show all cheers" aria-label="Show all cheers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7V2h6M17 2h5v5M17 22h5v-5M8 22H2v-5M2 2l6 6M22 2l-6 6M22 22l-6-6M2 22l6-6"/></svg></button>
 <div id="filter-toggle" title="Toggle filters">🔽</div>
 <div id="filter-panel" class="hidden">
   <div class="filter-section" id="trip-section" style="display:none;">
@@ -155,6 +170,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet">
     <div id="detail-controls">
+      <button id="mode-reverse" class="dm-btn" type="button" title="Reverse order" aria-label="Reverse order" aria-pressed="false">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+      </button>
+      <div id="detail-count-wrap" class="detail-count-wrap">
+        <span class="detail-line"></span>
+        <span id="detail-count" class="detail-count"></span>
+        <span class="detail-line"></span>
+      </div>
       <select id="pin-trip-select" title="Assign this cheers to a trip" aria-label="Assign this cheers to a trip"></select>
       <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
@@ -174,19 +197,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=7",
-    "/js/color.js": "/js/color.js?v=7",
-    "/js/config.js": "/js/config.js?v=7",
-    "/js/detail.js": "/js/detail.js?v=7",
-    "/js/filters.js": "/js/filters.js?v=7",
-    "/js/location-share.js": "/js/location-share.js?v=7",
-    "/js/markers.js": "/js/markers.js?v=7",
-    "/js/state.js": "/js/state.js?v=7",
-    "/js/util.js": "/js/util.js?v=7",
-    "/js/video.js": "/js/video.js?v=7"
+    "/js/api.js": "/js/api.js?v=11",
+    "/js/color.js": "/js/color.js?v=11",
+    "/js/config.js": "/js/config.js?v=11",
+    "/js/detail.js": "/js/detail.js?v=11",
+    "/js/filters.js": "/js/filters.js?v=11",
+    "/js/location-share.js": "/js/location-share.js?v=11",
+    "/js/markers.js": "/js/markers.js?v=11",
+    "/js/state.js": "/js/state.js?v=11",
+    "/js/util.js": "/js/util.js?v=11",
+    "/js/video.js": "/js/video.js?v=11"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=7"></script>
+<script type="module" src="/js/main.js?v=11"></script>
 </body>
 </html>
