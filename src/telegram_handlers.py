@@ -208,19 +208,29 @@ async def handle_pref_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.warning("Could not edit preference message: %s", e)
 
 
+def _known_users(chat_id, trip_id):
+    """Union of everyone who could appear on a trip's checklist, keyed by user_id -> display name:
+    pin-posters, anyone who ever joined a trip in this chat (kept so a row survives leaving), and
+    the trip's current members. Members' names win (freshest). This is the single source of truth
+    for name resolution — the callback must use it too, or a toggle can write back a raw user_id as
+    the name and permanently corrupt it."""
+    known = {u["user_id"]: u["user_name"] for u in get_pins_meta(chat_id)["users"]}
+    known.update({u["user_id"]: u["user_name"] for u in get_chat_trip_users(chat_id)})
+    known.update({m["user_id"]: m["user_name"] for m in get_trip_members(trip_id)})
+    return known
+
+
 def _trip_keyboard(trip_id, chat_id):
     """Checklist keyboard for the trip message: one toggle button per known user — pin-posters,
     anyone who ever joined a trip in this chat, and current members — checked for current members,
     plus an End-trip row for the creator."""
-    members = {m["user_id"]: m["user_name"] for m in get_trip_members(trip_id)}
-    known = {u["user_id"]: u["user_name"] for u in get_pins_meta(chat_id)["users"]}
-    known.update({u["user_id"]: u["user_name"] for u in get_chat_trip_users(chat_id)})  # joiners who never pinned keep their row after leaving
-    known.update(members)
+    member_ids = {m["user_id"] for m in get_trip_members(trip_id)}
+    known = _known_users(chat_id, trip_id)
     kb = []
     for user_id, user_name in sorted(known.items(), key=lambda kv: kv[1].lower()):
-        mark = "✅" if user_id in members else "⬜"
+        mark = "✅" if user_id in member_ids else "⬜"
         kb.append([InlineKeyboardButton(f"{mark} {user_name}", callback_data=f"trip_{trip_id}_{user_id}")])
-    kb.append([InlineKeyboardButton("🏁 End trip", callback_data=f"tripend_{trip_id}")])
+    kb.append([InlineKeyboardButton("🔚 End trip", callback_data=f"tripend_{trip_id}")])
     return InlineKeyboardMarkup(kb)
 
 
@@ -277,7 +287,14 @@ async def trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text("Several trips are open: " + ", ".join(t["name"] for t in open_trips) + "\nUse /trip end <name>.")
             return
         close_trip(target["id"])
-        await update.message.reply_text(f"🏁 Trip '{target['name']}' ended. New cheers won't be tagged to it.")
+        # Retire the checklist message too, so its toggle buttons don't keep implying the trip is live
+        # (the tripend_ callback does the same when ending via the button).
+        if target.get("checklist_msg_id"):
+            try:
+                await context.bot.edit_message_text(chat_id=chat.id, message_id=target["checklist_msg_id"], text=f"🔚 Trip '{target['name']}' ended.")
+            except Exception as e:
+                logger.warning("Could not close trip checklist for trip %s: %s", target["id"], e)
+        await update.message.reply_text(f"🔚 Trip '{target['name']}' ended. New cheers won't be tagged to it.")
         return
 
     name = " ".join(args).strip()
@@ -312,7 +329,7 @@ async def _handle_trip_callback(query, context) -> None:
             close_trip(trip["id"])
         await query.answer("Trip ended.")
         try:
-            await query.edit_message_text(f"🏁 Trip '{trip['name']}' ended.")
+            await query.edit_message_text(f"🔚 Trip '{trip['name']}' ended.")
         except Exception as e:
             logger.warning("Could not edit trip message: %s", e)
         return
@@ -333,9 +350,9 @@ async def _handle_trip_callback(query, context) -> None:
     if user.id == target_id:
         target_name = user.full_name or user.username or str(user.id)
     else:
-        target_name = next((m["user_name"] for m in get_trip_members(trip["id"]) if m["user_id"] == target_id), None)
-        if target_name is None:
-            target_name = next((u["user_name"] for u in get_pins_meta(chat_id)["users"] if u["user_id"] == target_id), str(target_id))
+        # Resolve from the same union the keyboard uses — never fall through to the raw id, which
+        # would get written back as the name and stick.
+        target_name = _known_users(chat_id, trip["id"]).get(target_id, str(target_id))
 
     member, moved_from = toggle_trip_member(trip["id"], target_id, target_name)
     if member and moved_from:

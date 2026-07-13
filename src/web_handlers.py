@@ -9,7 +9,7 @@ from aiohttp import ClientTimeout, web
 
 from auth import extract_init_data, is_member, verify_init_data
 from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES
-from database import add_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pin_trip
+from database import add_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip
 from telegram_handlers import reverse_geocode
 
 # Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
@@ -379,12 +379,14 @@ async def handle_submit_location(request: web.Request) -> web.Response:
 
 
 async def handle_pin_trip(request: web.Request) -> web.Response:
-    """Retro-tag: assign a pin to a trip (or clear it with trip_id=null) from the Mini App.
+    """Retro-tag: assign one or more pins to a trip (or clear with trip_id=null) from the Mini App.
 
     The fallback for cheers the auto-tagging missed — someone who forgot to join the trip, or a
-    pin tagged while briefly apart from the group. Any authorized member of the chat may tag any
-    of that chat's pins (same group-trust model as the rest of the map); set_pin_trip enforces
-    that both the pin and the trip belong to the authorized chat_id."""
+    whole run of pins from a trip nobody had started yet. Any authorized member of the chat may tag
+    any of that chat's pins (same group-trust model as the rest of the map); set_pins_trip enforces
+    that both the pins and the trip belong to the authorized chat_id.
+
+    Body accepts either {"pin_id": N} (single) or {"pin_ids": [...]} (bulk)."""
     chat_id_raw = request.rel_url.query.get("chat_id")
     if not chat_id_raw:
         return web.json_response({"error": "chat_id required"}, status=400)
@@ -398,13 +400,21 @@ async def handle_pin_trip(request: web.Request) -> web.Response:
 
     try:
         body = await request.json()
-        pin_id = int(body["pin_id"])
+        raw_ids = body["pin_ids"] if "pin_ids" in body else [body["pin_id"]]
+        if not isinstance(raw_ids, list):  # reject a bare string/number, which int()-iterating would mangle
+            raise TypeError
+        pin_ids = [int(x) for x in raw_ids]
         trip_id = body.get("trip_id")
         if trip_id is not None:
             trip_id = int(trip_id)
     except (ValueError, TypeError, KeyError):
         return web.json_response({"error": "invalid request"}, status=400)
 
-    if not set_pin_trip(chat_id, pin_id, trip_id):
+    # Cap the batch well under SQLite's bound-variable limit; the in-view list is small in practice.
+    if not pin_ids or len(pin_ids) > 500:
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    updated = set_pins_trip(chat_id, pin_ids, trip_id)
+    if not updated:
         return web.json_response({"error": "not found"}, status=404)
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True, "updated": updated})

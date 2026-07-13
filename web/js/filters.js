@@ -1,6 +1,6 @@
 // Filter panel, pagination, and the server-side pin fetch.
 import { state } from './state.js';
-import { esc } from './util.js';
+import { esc, tripDupDate } from './util.js';
 import { getColor } from './color.js';
 import { authHeaders } from './api.js';
 import { PAGE_SIZE } from './config.js';
@@ -107,7 +107,7 @@ function onMapMove() {
 
 // Trip chips: single-select — tapping a chip filters the map to that trip (server-side), tapping
 // it again clears the filter. The open trip (no closed_at) gets a live dot.
-function renderTripChips() {
+export function renderTripChips() {
   var wrap = document.getElementById('trip-filters');
   var section = document.getElementById('trip-section');
   if (!state.trips.length) {
@@ -119,10 +119,27 @@ function renderTripChips() {
   state.trips.forEach(function(t) {
     var cls = 'trip-chip' + (t.id === state.selectedTripId ? ' active' : '');
     var live = t.closed_at ? '' : '<span class="trip-live"></span>';
-    html += '<span class="' + cls + '" data-trip-id="' + t.id + '">' + live + esc(t.name) +
+    var dt = tripDupDate(t, state.trips);  // short date when another trip shares this name
+    var dateTag = dt ? ' <span class="trip-date">' + esc(dt) + '</span>' : '';
+    html += '<span class="' + cls + '" data-trip-id="' + t.id + '">' + live + esc(t.name) + dateTag +
       ' <span class="trip-count">' + t.pin_count + '</span></span>';
   });
   wrap.innerHTML = html;
+}
+
+// Keep the filter chip counts honest after (bulk) retro-tagging, without refetching /api/pins-meta.
+// `moves` is a list of {from, to} trip-id transitions (null = "No trip", which has no chip).
+export function applyTripCountsDelta(moves) {
+  var counts = {};
+  moves.forEach(function(m) {
+    if (m.from === m.to) return;
+    if (m.from != null) counts[m.from] = (counts[m.from] || 0) - 1;
+    if (m.to != null) counts[m.to] = (counts[m.to] || 0) + 1;
+  });
+  state.trips.forEach(function(t) {
+    if (counts[t.id]) t.pin_count = Math.max(0, t.pin_count + counts[t.id]);
+  });
+  renderTripChips();
 }
 
 export function populateFilters(meta) {

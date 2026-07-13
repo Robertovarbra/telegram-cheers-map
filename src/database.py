@@ -483,20 +483,25 @@ def get_trips(chat_id):
         conn.close()
 
 
-def set_pin_trip(chat_id, pin_id, trip_id):
-    """Assign a pin to a trip (or clear with trip_id=None). Both the pin and the trip must belong
-    to chat_id — the caller's authorized chat — so a member can never touch another chat's data.
-    Returns True iff the pin was updated."""
+def set_pins_trip(chat_id, pin_ids, trip_id):
+    """Assign one or more pins to a trip (or clear with trip_id=None). Both the pins and the trip
+    must belong to chat_id — the caller's authorized chat — so a member can never touch another
+    chat's data. Returns the number of pins actually updated."""
+    if not pin_ids:
+        return 0
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
         if trip_id is not None:
             c.execute("SELECT 1 FROM trips WHERE id = ? AND chat_id = ?", (trip_id, chat_id))
             if not c.fetchone():
-                return False
-        c.execute("UPDATE pins SET trip_id = ? WHERE id = ? AND chat_id = ?", (trip_id, pin_id, chat_id))
+                return 0
+        # Placeholders are a fixed count of "?" — the ids themselves are always bound params, never
+        # interpolated — so there's no injection surface here.
+        placeholders = ",".join("?" for _ in pin_ids)
+        c.execute(f"UPDATE pins SET trip_id = ? WHERE chat_id = ? AND id IN ({placeholders})", [trip_id, chat_id, *pin_ids])
         conn.commit()
-        return c.rowcount > 0
+        return c.rowcount
     finally:
         conn.close()
 
