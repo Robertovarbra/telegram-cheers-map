@@ -82,7 +82,10 @@ function renderDetailList() {
         '<div class="vm-ph" style="background:' + esc(c) + '">' + placeholderGlyph(p) + '</div>' +
         '<video muted loop playsinline preload="none" data-file-id="' + esc(p.video_file_id) + '"></video>' +
       '</div>' +
-      '<div class="detail-rowtext"><span class="dr-name">' + esc(p.user_name) + '</span> <span class="dr-date">— ' + esc(relTime(p.created_at)) + '</span></div>' +
+      '<div class="detail-rowtext">' +
+        '<div class="dr-line1"><span class="dr-name">' + esc(p.user_name) + '</span> <span class="dr-date">— ' + esc(relTime(p.created_at)) + '</span></div>' +
+        '<div class="dr-trip">' + rowTripLabel(p) + '</div>' +
+      '</div>' +
       '<span class="dr-check">✓</span>' +
     '</div>';
   });
@@ -153,6 +156,24 @@ function tripName(tripId) {
   if (tripId == null) return null;
   var t = state.trips.find(function (x) { return x.id === tripId; });
   return t ? t.name : null;
+}
+
+// The per-row trip tag markup (escaped for innerHTML); empty string when the cheers has no trip.
+function rowTripLabel(pin) {
+  var name = tripName(pin.trip_id);
+  return name ? '🍻 ' + esc(name) : '';
+}
+
+// Update the rows' trip tags in place after a (re)assignment — avoids a full list re-render, which
+// would reload every thumbnail. Uses textContent (no escaping needed).
+function refreshRowTrips() {
+  document.querySelectorAll('.detail-row').forEach(function (r) {
+    var p = state.detailPins && state.detailPins[parseInt(r.dataset.idx, 10)];
+    var el = r.querySelector('.dr-trip');
+    if (!p || !el) return;
+    var name = tripName(p.trip_id);
+    el.textContent = name ? '🍻 ' + name : '';
+  });
 }
 
 function renderTripBar() {
@@ -251,6 +272,7 @@ function onTripApply() {
   var moves = pins.map(function (p) { return { from: p.trip_id, to: tripId }; });
   applyTripCountsDelta(moves);  // optimistic; reverted if the API rejects it
   pins.forEach(function (p) { p.trip_id = tripId; });
+  refreshRowTrips();  // reflect the new tags in the rows right away
   var btn = document.getElementById('pin-trip-apply');
   btn.disabled = true;
   btn.textContent = 'Applying…';
@@ -258,8 +280,9 @@ function onTripApply() {
     .then(function (r) { if (!r.ok) throw new Error('failed ' + r.status); })
     .then(function () { btn.textContent = 'Apply'; exitSelect(); })
     .catch(function () {
-      pins.forEach(function (p, i) { p.trip_id = moves[i].from; });  // revert pins + counts, keep the selection to retry
+      pins.forEach(function (p, i) { p.trip_id = moves[i].from; });  // revert pins + counts + row tags, keep the selection to retry
       applyTripCountsDelta(moves.map(function (m) { return { from: m.to, to: m.from }; }));
+      refreshRowTrips();
       btn.textContent = 'Apply';
       btn.disabled = false;
     });

@@ -52,12 +52,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .detail-thumb video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.3s ease; }
 .detail-thumb video.ready { opacity: 1; }
 .detail-thumb .vm-ph { font-size: 17px; }
-.detail-rowtext { font-size: 15px; color: #111; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-rowtext { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.dr-line1 { font-size: 15px; color: #111; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-rowtext .dr-name { font-weight: 600; }
 .detail-rowtext .dr-date { color: #999; }
+/* Per-row trip tag: shows which trip this cheers belongs to at a glance. Hidden when untagged. */
+.dr-trip { font-size: 11px; color: #2c6bb3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.dr-trip:empty { display: none; }
+/* The whole header (counter + trip bar) sticks to the top of the scrolling sheet, so the trip
+   picker stays reachable while selecting cheers deep in a long list — no scrolling back up. */
+#detail-header { position: sticky; top: 0; z-index: 2; background: #fff; box-shadow: 0 1px 0 #f0f0f0; }
 /* Detail controls: centered counter with framing lines, loop button pinned right, reverse pinned left.
    Extra top padding keeps the row off the sheet's rounded top edge. */
-#detail-controls { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 20px 14px 12px; background: #fff; }
+#detail-controls { position: relative; display: flex; align-items: center; justify-content: center; padding: 20px 14px 12px; background: #fff; }
 .detail-count-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .detail-line { display: block; width: 24px; height: 1px; background: #ccc; flex-shrink: 0; }
 .detail-count { font-size: 13px; color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -192,33 +199,35 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
   <button id="detail-close" aria-label="Close">✕</button>
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet">
-    <div id="detail-controls">
-      <button id="mode-reverse" class="dm-btn" type="button" title="Reverse order" aria-label="Reverse order" aria-pressed="false">
-         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
-      </button>
-      <div id="detail-count-wrap" class="detail-count-wrap">
-        <span class="detail-line"></span>
-        <span id="detail-count" class="detail-count"></span>
-        <span class="detail-line"></span>
-      </div>
-      <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
-      </button>
-    </div>
-    <div id="detail-trip-bar" class="hidden">
-      <div id="dtb-view">
-        <span id="dtb-current" class="trip-pill empty">No trip</span>
-        <span class="dtb-hint">Hold a video to tag it</span>
-      </div>
-      <div id="dtb-edit" class="hidden">
-        <div class="dtb-head">
-          <span id="dtb-count">0 selected</span>
-          <span class="dtb-actions">
-            <button id="pin-trip-cancel" type="button">Cancel</button>
-            <button id="pin-trip-apply" type="button" disabled>Apply</button>
-          </span>
+    <div id="detail-header">
+      <div id="detail-controls">
+        <button id="mode-reverse" class="dm-btn" type="button" title="Reverse order" aria-label="Reverse order" aria-pressed="false">
+           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        </button>
+        <div id="detail-count-wrap" class="detail-count-wrap">
+          <span class="detail-line"></span>
+          <span id="detail-count" class="detail-count"></span>
+          <span class="detail-line"></span>
         </div>
-        <div id="dtb-targets" aria-label="Assign selected cheers to a trip"></div>
+        <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+        </button>
+      </div>
+      <div id="detail-trip-bar" class="hidden">
+        <div id="dtb-view">
+          <span id="dtb-current" class="trip-pill empty">No trip</span>
+          <span class="dtb-hint">Hold a video to tag it</span>
+        </div>
+        <div id="dtb-edit" class="hidden">
+          <div class="dtb-head">
+            <span id="dtb-count">0 selected</span>
+            <span class="dtb-actions">
+              <button id="pin-trip-cancel" type="button">Cancel</button>
+              <button id="pin-trip-apply" type="button" disabled>Apply</button>
+            </span>
+          </div>
+          <div id="dtb-targets" aria-label="Assign selected cheers to a trip"></div>
+        </div>
       </div>
     </div>
     <div id="detail-list"></div>
@@ -235,19 +244,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=12",
-    "/js/color.js": "/js/color.js?v=12",
-    "/js/config.js": "/js/config.js?v=12",
-    "/js/detail.js": "/js/detail.js?v=12",
-    "/js/filters.js": "/js/filters.js?v=12",
-    "/js/location-share.js": "/js/location-share.js?v=12",
-    "/js/markers.js": "/js/markers.js?v=12",
-    "/js/state.js": "/js/state.js?v=12",
-    "/js/util.js": "/js/util.js?v=12",
-    "/js/video.js": "/js/video.js?v=12"
+    "/js/api.js": "/js/api.js?v=13",
+    "/js/color.js": "/js/color.js?v=13",
+    "/js/config.js": "/js/config.js?v=13",
+    "/js/detail.js": "/js/detail.js?v=13",
+    "/js/filters.js": "/js/filters.js?v=13",
+    "/js/location-share.js": "/js/location-share.js?v=13",
+    "/js/markers.js": "/js/markers.js?v=13",
+    "/js/state.js": "/js/state.js?v=13",
+    "/js/util.js": "/js/util.js?v=13",
+    "/js/video.js": "/js/video.js?v=13"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=12"></script>
+<script type="module" src="/js/main.js?v=13"></script>
 </body>
 </html>
