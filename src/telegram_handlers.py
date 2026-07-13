@@ -313,6 +313,30 @@ def _open_trips_summary(chat_id):
     return "\n".join(lines)
 
 
+async def _resummon_checklists(context, chat_id) -> bool:
+    """Re-post every open trip's checklist at the bottom of the chat so anyone can toggle their own
+    membership without scrolling back to the original message. Keeps exactly one *live* checklist per
+    trip: the fresh message becomes checklist_msg_id and the previous one is retired — deleted if we
+    can, otherwise its keyboard is stripped so it can't cause a split-brain toggle (only the tapped
+    message refreshes). Returns False when the chat has no open trips."""
+    open_trips = get_open_trips(chat_id)
+    if not open_trips:
+        return False
+    for t in open_trips:
+        old_msg_id = t.get("checklist_msg_id")
+        msg = await context.bot.send_message(chat_id, _trip_text(t), reply_markup=_trip_keyboard(t["id"], chat_id))
+        set_trip_checklist_msg(t["id"], msg.message_id)
+        if old_msg_id and old_msg_id != msg.message_id:
+            try:
+                await context.bot.delete_message(chat_id, old_msg_id)
+            except Exception:
+                try:
+                    await context.bot.edit_message_reply_markup(chat_id=chat_id, message_id=old_msg_id, reply_markup=None)
+                except Exception:
+                    pass
+    return True
+
+
 async def _send_trip_menu(message, chat_id) -> None:
     """The /trip landing menu: shows each open trip with its members, Start always, and End only
     when a trip is open. Start asks for a name; End lists the caller's own open trips to close."""
@@ -337,10 +361,12 @@ async def trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _send_trip_menu(update.message, chat.id)
         return
 
-    # /trip members (aliases) — post who's on each open trip, so nobody has to scroll up to the
-    # checklist. Intercepted before the create path so it isn't taken as a trip named "members".
+    # /trip members (aliases) — re-summon each open trip's checklist to the bottom of the chat, so
+    # people can see who's on and toggle their own membership without scrolling back to the original
+    # message. Intercepted before the create path so it isn't taken as a trip named "members".
     if args[0].lower() in ("members", "member", "who", "list", "roster"):
-        await update.message.reply_text(_open_trips_summary(chat.id) or "No open trips.")
+        if not await _resummon_checklists(context, chat.id):
+            await update.message.reply_text("No open trips.")
         return
 
     if args[0].lower() == "end":
