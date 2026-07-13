@@ -297,14 +297,27 @@ async def _end_trip(bot, chat_id, trip) -> None:
             logger.warning("Could not retire checklist for trip %s: %s", trip["id"], e)
 
 
+def _open_trips_summary(chat_id):
+    """One line per open trip with its members, or None if the chat has no open trips. Lets /trip
+    (and /trip members) show who's on each trip without scrolling back to the checklist."""
+    open_trips = get_open_trips(chat_id)
+    if not open_trips:
+        return None
+    lines = []
+    for t in open_trips:
+        names = ", ".join(m["user_name"] for m in get_trip_members(t["id"])) or "nobody yet"
+        lines.append(f"🍻 {t['name']} — {names}")
+    return "\n".join(lines)
+
+
 async def _send_trip_menu(message, chat_id) -> None:
-    """The /trip landing menu: Start always, End only when a trip is open. Both lead to a guided
-    button flow (Start asks for a name; End lists the caller's own open trips to close)."""
+    """The /trip landing menu: shows each open trip with its members, Start always, and End only
+    when a trip is open. Start asks for a name; End lists the caller's own open trips to close."""
     open_trips = get_open_trips(chat_id)
     row = [InlineKeyboardButton("🍻 Start trip", callback_data="tripnew")]
     if open_trips:
         row.append(InlineKeyboardButton("🔚 End trip", callback_data="tripendmenu"))
-    header = ("Open trips:\n" + "\n".join(f"🍻 {t['name']}" for t in open_trips)) if open_trips else "No open trips yet."
+    header = _open_trips_summary(chat_id) or "No open trips yet."
     await message.reply_text(header, reply_markup=InlineKeyboardMarkup([row]))
 
 
@@ -319,6 +332,12 @@ async def trip_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not args:
         await _send_trip_menu(update.message, chat.id)
+        return
+
+    # /trip members (aliases) — post who's on each open trip, so nobody has to scroll up to the
+    # checklist. Intercepted before the create path so it isn't taken as a trip named "members".
+    if args[0].lower() in ("members", "member", "who", "list", "roster"):
+        await update.message.reply_text(_open_trips_summary(chat.id) or "No open trips.")
         return
 
     if args[0].lower() == "end":

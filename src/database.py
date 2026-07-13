@@ -340,8 +340,10 @@ def _exclusive_join(c, chat_id, trip_id, user_id, user_name):
 
 
 def create_trip(chat_id, name, created_by, creator_name):
-    """Start a new trip. Other open trips keep running (a chat can hold several in parallel); the
-    creator auto-joins, which moves them off any other open trip. Returns (trip_id, moved_from)."""
+    """Start a new trip. Other open trips keep running (a chat can hold several in parallel). The
+    creator auto-joins ONLY if they're not already on another open trip — creating a trip while you
+    are on one (e.g. setting up a parallel/subgroup trip) must not silently pull you off it; you'd
+    tap in deliberately to switch. Returns (trip_id, moved_from)."""
     conn = sqlite3.connect(str(DB_PATH))
     try:
         conn.isolation_level = None
@@ -350,7 +352,12 @@ def create_trip(chat_id, name, created_by, creator_name):
         now = datetime.now(timezone.utc).isoformat()
         c.execute("INSERT INTO trips (chat_id, name, created_by, created_at) VALUES (?, ?, ?, ?)", (chat_id, name, created_by, now))
         trip_id = c.lastrowid
-        moved_from = _exclusive_join(c, chat_id, trip_id, created_by, creator_name)
+        c.execute(
+            "SELECT 1 FROM trips t JOIN trip_members m ON m.trip_id = t.id WHERE t.chat_id = ? AND t.closed_at IS NULL AND t.id != ? AND m.user_id = ?",
+            (chat_id, trip_id, created_by),
+        )
+        already_on_open_trip = c.fetchone() is not None
+        moved_from = [] if already_on_open_trip else _exclusive_join(c, chat_id, trip_id, created_by, creator_name)
         c.execute("COMMIT")
         return trip_id, moved_from
     finally:
