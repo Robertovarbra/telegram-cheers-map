@@ -612,12 +612,14 @@ def delete_chat_pins(chat_id):
 
 
 def get_all_chat_ids():
+    """Every chat we hold data for — pins, trips, or trip rosters. Startup cleanup iterates these to
+    purge chats the bot was removed from; trips can create chat-scoped data before any pin exists, so
+    a trip-only chat must be discoverable here too (delete_chat_pins already purges its trip data)."""
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
-        c.execute("SELECT DISTINCT chat_id FROM pins")
-        rows = c.fetchall()
-        return [r[0] for r in rows]
+        c.execute("SELECT chat_id FROM pins UNION SELECT chat_id FROM trips UNION SELECT chat_id FROM chat_trip_users")
+        return [r[0] for r in c.fetchall()]
     finally:
         conn.close()
 
