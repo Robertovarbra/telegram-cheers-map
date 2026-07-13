@@ -65,6 +65,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 /* Detail controls: centered counter with framing lines, loop button pinned right, reverse pinned left.
    Extra top padding keeps the row off the sheet's rounded top edge. */
 #detail-controls { position: relative; display: flex; align-items: center; justify-content: center; padding: 20px 14px 12px; background: #fff; }
+#detail-controls.hidden { display: none; }  /* hidden while selecting cheers, to give the list more room */
 .detail-count-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .detail-line { display: block; width: 24px; height: 1px; background: #ccc; flex-shrink: 0; }
 .detail-count { font-size: 13px; color: #888; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -78,17 +79,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 .trip-pill { font-size: 12px; font-weight: 600; color: #2c6bb3; background: #e7f0fb; border-radius: 999px; padding: 4px 12px; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trip-pill.empty { color: #999; background: #f0f0f2; font-weight: 500; }
 .dtb-hint { font-size: 11px; color: #b0b0b0; }
-#dtb-edit { display: flex; flex-direction: column; gap: 7px; }
+/* padding-top gives the picker breathing room from the sheet's rounded top edge once the playback
+   controls above it are hidden during selection. */
+#dtb-edit { display: flex; flex-direction: column; gap: 9px; padding-top: 14px; }
 #dtb-edit.hidden { display: none; }
 .dtb-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-#dtb-count { font-size: 12px; font-weight: 600; color: #444; }
-.dtb-actions { display: flex; gap: 6px; }
-.dtb-actions button { font-size: 12px; border-radius: 8px; padding: 5px 12px; cursor: pointer; white-space: nowrap; }
+#dtb-count { font-size: 13px; font-weight: 600; color: #444; }
+.dtb-actions { display: flex; gap: 8px; }
+.dtb-actions button { font-size: 14px; border-radius: 9px; padding: 8px 18px; cursor: pointer; white-space: nowrap; }
 #pin-trip-cancel { color: #666; border: 1px solid #ddd; background: #eef0f3; }
 #pin-trip-apply { color: #fff; border: 1px solid #007aff; background: #007aff; }
 #pin-trip-apply:disabled { color: #eef4ff; border-color: #a9ccf7; background: #a9ccf7; cursor: default; }
-#dtb-targets { display: flex; flex-wrap: nowrap; gap: 5px; overflow-x: auto; padding-bottom: 2px; }
-.tt-chip { font-size: 12px; color: #333; background: #eef0f3; border-radius: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; user-select: none; flex-shrink: 0; }
+#dtb-targets { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.tt-chip { font-size: 13px; color: #333; background: #eef0f3; border-radius: 14px; padding: 7px 14px; cursor: pointer; white-space: nowrap; user-select: none; flex-shrink: 0; }
 .tt-chip.active { background: #007aff; color: #fff; }
 .dm-btn { position: absolute; right: 14px; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: #eef0f3; color: #666; cursor: pointer; padding: 0; }
 .dm-btn svg { width: 18px; height: 18px; display: block; }
@@ -244,19 +247,19 @@ html, body { width: 100%; height: 100%; overflow: hidden; }
 <script type="importmap">
 {
   "imports": {
-    "/js/api.js": "/js/api.js?v=13",
-    "/js/color.js": "/js/color.js?v=13",
-    "/js/config.js": "/js/config.js?v=13",
-    "/js/detail.js": "/js/detail.js?v=13",
-    "/js/filters.js": "/js/filters.js?v=13",
-    "/js/location-share.js": "/js/location-share.js?v=13",
-    "/js/markers.js": "/js/markers.js?v=13",
-    "/js/state.js": "/js/state.js?v=13",
-    "/js/util.js": "/js/util.js?v=13",
-    "/js/video.js": "/js/video.js?v=13"
+    "/js/api.js": "/js/api.js?v=14",
+    "/js/color.js": "/js/color.js?v=14",
+    "/js/config.js": "/js/config.js?v=14",
+    "/js/detail.js": "/js/detail.js?v=14",
+    "/js/filters.js": "/js/filters.js?v=14",
+    "/js/location-share.js": "/js/location-share.js?v=14",
+    "/js/markers.js": "/js/markers.js?v=14",
+    "/js/state.js": "/js/state.js?v=14",
+    "/js/util.js": "/js/util.js?v=14",
+    "/js/video.js": "/js/video.js?v=14"
   }
 }
 </script>
-<script type="module" src="/js/main.js?v=13"></script>
+<script type="module" src="/js/main.js?v=14"></script>
 </body>
 </html>

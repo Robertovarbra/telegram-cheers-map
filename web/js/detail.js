@@ -178,17 +178,20 @@ function refreshRowTrips() {
 
 function renderTripBar() {
   var bar = document.getElementById('detail-trip-bar');
-  if (!state.trips.length) { bar.classList.add('hidden'); return; }
+  var controls = document.getElementById('detail-controls');
+  if (!state.trips.length) { bar.classList.add('hidden'); controls.classList.remove('hidden'); return; }
   bar.classList.remove('hidden');
   var view = document.getElementById('dtb-view');
   var edit = document.getElementById('dtb-edit');
   if (inSelectMode()) {
+    controls.classList.add('hidden');  // free the header (and list) of the playback row while tagging
     view.classList.add('hidden');
     edit.classList.remove('hidden');
     document.getElementById('dtb-count').textContent = tripSel.size + ' selected';
     document.getElementById('pin-trip-apply').disabled = targetTripId === undefined;
     renderTargetChips();
   } else {
+    controls.classList.remove('hidden');
     edit.classList.add('hidden');
     view.classList.remove('hidden');
     var cur = state.detailPins && state.detailPins[detailIdx];
