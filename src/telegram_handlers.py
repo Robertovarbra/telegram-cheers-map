@@ -198,7 +198,7 @@ async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def handle_pref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     data = query.data
-    if data.startswith(("trip_", "tripend_", "tripnew", "tripendmenu", "tripclose_")):
+    if data.startswith(("trip_", "tripend_", "tripnew", "tripendmenu", "tripmembers", "tripclose_")):
         await _handle_trip_callback(query, context)  # answers the query itself (custom toasts)
         return
     await query.answer()
@@ -338,11 +338,13 @@ async def _resummon_checklists(context, chat_id) -> bool:
 
 
 async def _send_trip_menu(message, chat_id) -> None:
-    """The /trip landing menu: shows each open trip with its members, Start always, and End only
-    when a trip is open. Start asks for a name; End lists the caller's own open trips to close."""
+    """The /trip landing menu: shows each open trip with its members and buttons. Start is always
+    offered; Members (re-summon the checklists) and End are offered only when a trip is open. Start
+    asks for a name; End lists the caller's own open trips to close."""
     open_trips = get_open_trips(chat_id)
     row = [InlineKeyboardButton("🍻 Start trip", callback_data="tripnew")]
     if open_trips:
+        row.append(InlineKeyboardButton("👥 Members", callback_data="tripmembers"))
         row.append(InlineKeyboardButton("🔚 End trip", callback_data="tripendmenu"))
     header = _open_trips_summary(chat_id) or "No open trips yet."
     await message.reply_text(header, reply_markup=InlineKeyboardMarkup([row]))
@@ -417,6 +419,12 @@ async def _handle_trip_callback(query, context) -> None:
             await query.edit_message_text("🍻 Send the trip name as a message (e.g. Lisboa 🇵🇹).")
         except Exception as e:
             logger.warning("Could not edit trip menu: %s", e)
+        return
+
+    # /trip menu: Members -> re-summon the open trips' checklists so anyone can toggle membership.
+    if data == "tripmembers":
+        await query.answer()
+        await _resummon_checklists(context, chat_id)
         return
 
     # /trip menu: End -> list the caller's own open trips to close (ending is creator-only).
