@@ -9,7 +9,7 @@ from aiohttp import ClientTimeout, web
 
 from auth import extract_init_data, is_member, verify_init_data
 from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES
-from database import add_pin, get_chat_ids_for_file, get_pins, get_pins_meta, pop_pending_pin
+from database import add_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip
 from telegram_handlers import reverse_geocode
 
 # Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
@@ -288,7 +288,9 @@ async def handle_pins(request: web.Request) -> web.Response:
         date_from = request.rel_url.query.get("date_from")
         date_to = request.rel_url.query.get("date_to")
         q = request.rel_url.query.get("q")
-        result = get_pins(int(chat_id), limit=limit, offset=offset, user_ids=user_ids, date_from=date_from, date_to=date_to, q=q)
+        trip_id_raw = request.rel_url.query.get("trip_id")
+        trip_id = int(trip_id_raw) if trip_id_raw and trip_id_raw.isdigit() else None
+        result = get_pins(int(chat_id), limit=limit, offset=offset, user_ids=user_ids, date_from=date_from, date_to=date_to, q=q, trip_id=trip_id)
         return web.json_response(result)
     except Exception:
         return web.json_response({"error": "internal error"}, status=400)
@@ -347,6 +349,7 @@ async def handle_submit_location(request: web.Request) -> web.Response:
         return web.json_response({"error": "no pending video"}, status=409)
 
     city, country, country_code = await reverse_geocode(lat, lng)
+    trip = get_open_trip_for_member(chat_id, user_id)
     add_pin(
         chat_id=chat_id,
         message_id=pending["message_id"],
@@ -359,6 +362,7 @@ async def handle_submit_location(request: web.Request) -> web.Response:
         city=city,
         country=country,
         country_code=country_code,
+        trip_id=trip["id"] if trip else None,
     )
 
     # Best-effort: clear the bot's "tap to share location" prompt from the group, matching the
@@ -372,3 +376,45 @@ async def handle_submit_location(request: web.Request) -> web.Response:
             pass
 
     return web.json_response({"ok": True})
+
+
+async def handle_pin_trip(request: web.Request) -> web.Response:
+    """Retro-tag: assign one or more pins to a trip (or clear with trip_id=null) from the Mini App.
+
+    The fallback for cheers the auto-tagging missed — someone who forgot to join the trip, or a
+    whole run of pins from a trip nobody had started yet. Any authorized member of the chat may tag
+    any of that chat's pins (same group-trust model as the rest of the map); set_pins_trip enforces
+    that both the pins and the trip belong to the authorized chat_id.
+
+    Body accepts either {"pin_id": N} (single) or {"pin_ids": [...]} (bulk)."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    _, err = await _authorize(request, chat_id)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+        raw_ids = body["pin_ids"] if "pin_ids" in body else [body["pin_id"]]
+        if not isinstance(raw_ids, list):  # reject a bare string/number, which int()-iterating would mangle
+            raise TypeError
+        pin_ids = [int(x) for x in raw_ids]
+        trip_id = body.get("trip_id")
+        if trip_id is not None:
+            trip_id = int(trip_id)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    # Cap the batch well under SQLite's bound-variable limit; the in-view list is small in practice.
+    if not pin_ids or len(pin_ids) > 500:
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    updated = set_pins_trip(chat_id, pin_ids, trip_id)
+    if not updated:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"ok": True, "updated": updated})

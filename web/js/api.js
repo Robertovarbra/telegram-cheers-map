@@ -5,3 +5,11 @@ export function authHeaders() { return { 'Authorization': 'tma ' + INIT_DATA }; 
 
 // <video> tags can't send headers, so the video endpoint takes initData as a query param.
 export function videoUrl(fileId) { return '/api/video?file_id=' + encodeURIComponent(fileId) + '&auth=' + encodeURIComponent(INIT_DATA); }
+
+export function apiPost(path, chatId, body) {
+  return fetch(path + '?chat_id=' + encodeURIComponent(chatId), {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+    body: JSON.stringify(body),
+  });
+}

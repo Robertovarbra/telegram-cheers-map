@@ -21,6 +21,16 @@ export function relTime(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
+// Short "Mon D" date to disambiguate a trip whose name is shared by another trip in the list
+// (e.g. one open, one closed). Returns '' when the name is unique or the date is unusable, so
+// callers can drop it entirely. Keeps the filter chips and the detail dropdown labelled the same way.
+export function tripDupDate(trip, trips) {
+  var dup = trips.filter(function (t) { return t.name.toLowerCase() === trip.name.toLowerCase(); }).length > 1;
+  if (!dup || !trip.created_at) return '';
+  var d = new Date(trip.created_at);
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 export function extractChatIdFromStartParam(sp) {
   if (!sp || !sp.startsWith('c')) return null;
   var rest = sp.slice(1);

@@ -67,7 +67,10 @@ export function startLocationShare(cid) {
         return;
       }
       if (r.status === 409) { showError('We couldn’t find a cheers waiting for a location. Send a new video, then ' + ATTACH_HINT); return; }
-      if (r.status === 401 || r.status === 403) { showError('Open this from inside your Telegram group to share your location.'); return; }
+      // 401 = the Mini App reached us without a valid Telegram session (initData); 403 = the session
+      // is valid but you're not seen as a member of this chat. Kept distinct so the message matches.
+      if (r.status === 401) { showError('Couldn’t verify your Telegram session. Reopen this from the 📍 Share location button in the chat, or ' + ATTACH_HINT); return; }
+      if (r.status === 403) { showError('You don’t appear to be a member of this group, so we can’t pin here. ' + ATTACH_HINT); return; }
       showError('Something went wrong saving your pin. Please try again.');
     }).catch(function() {
       showError('Network error. Please try again.');
