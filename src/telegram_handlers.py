@@ -73,6 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    track("map_command", chat_id=chat_id, user_id=update.effective_user.id if update.effective_user else None)
     map_url = f"https://t.me/{BOT_USERNAME}/map?startapp=c{chat_id}"
     keyboard = [[InlineKeyboardButton("Open Map", url=map_url)]]
 
@@ -551,6 +552,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         video_link=video_link,
         prompt_msg_id=bot_reply.message_id,
     )
+    track("pin_started", chat_id=chat.id, user_id=user.id)
 
 
 _geocode_cache: dict[tuple[float, float], tuple[str | None, str | None, str | None]] = {}
@@ -629,6 +631,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         country_code=country_code,
         trip_id=trip["id"] if trip else None,
     )
+    track("pin_created", chat_id=chat_id, user_id=user.id)
 
     location_msg_id = update.effective_message.message_id
     prompt_msg_id = pending.get("prompt_msg_id")
