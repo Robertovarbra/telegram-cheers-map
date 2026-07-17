@@ -1,7 +1,10 @@
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from config import DB_PATH
+
+logger = logging.getLogger(__name__)
 
 
 def init_db():
@@ -137,9 +140,37 @@ def migrate_db():
             """)
         except sqlite3.OperationalError:
             pass
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event TEXT NOT NULL,
+                chat_id INTEGER,
+                user_id INTEGER,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_created ON analytics_events(event, created_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events(created_at)")
         conn.commit()
     finally:
         conn.close()
+
+
+def track(event, chat_id=None, user_id=None):
+    """Fire-and-forget analytics write. Never raises into the caller —
+    a broken/locked DB must not take down a bot handler."""
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=1)
+        try:
+            conn.execute(
+                "INSERT INTO analytics_events (event, chat_id, user_id, created_at) VALUES (?, ?, ?, ?)",
+                (event, chat_id, user_id, datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning("track(%s) failed", event, exc_info=True)
 
 
 def set_user_pref(user_id, key, value):

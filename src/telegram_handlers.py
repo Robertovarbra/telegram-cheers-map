@@ -26,6 +26,7 @@ from database import (
     set_trip_checklist_msg,
     set_user_pref,
     toggle_trip_member,
+    track,
 )
 
 
@@ -682,3 +683,38 @@ async def cleanup_inactive_chats(bot):
         logger.info("Startup cleanup complete. Deleted %s pin(s) total.", total_deleted)
     else:
         logger.info("Cleanup check complete. All chats are accessible.")
+
+
+# Bot membership statuses that mean "the bot is actually in the chat". RESTRICTED only counts
+# when is_member is True; LEFT and BANNED (kicked) are out.
+_PRESENT_STATUSES = (ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER)
+
+
+def _is_in_chat(member):
+    if member.status in _PRESENT_STATUSES:
+        return True
+    if member.status == ChatMember.RESTRICTED:
+        return bool(member.is_member)
+    return False
+
+
+async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Record when the bot is added to / removed from a group, for internal analytics only.
+    Pin cleanup stays with cleanup_inactive_chats (startup-only, so accidental removals are recoverable)."""
+    cm = update.my_chat_member
+    if cm is None:
+        return
+
+    # Group-centric bot: a private-chat "add" is just a user opening the DM, so it's skipped.
+    if cm.chat.type not in (Chat.GROUP, Chat.SUPERGROUP):
+        return
+
+    was_in = _is_in_chat(cm.old_chat_member)
+    now_in = _is_in_chat(cm.new_chat_member)
+    if was_in == now_in:
+        return  # e.g. member -> administrator; role churn, not an add/remove
+
+    actor_id = cm.from_user.id if cm.from_user else None
+    event = "bot_added" if now_in else "bot_removed"
+    track(event, chat_id=cm.chat.id, user_id=actor_id)
+    logger.info("Tracked %s for chat %s (by user %s)", event, cm.chat.id, actor_id)
