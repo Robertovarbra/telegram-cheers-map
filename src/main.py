@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
+    ChatMemberHandler,
     CommandHandler,
     MessageHandler,
     filters,
@@ -20,6 +21,7 @@ from telegram_handlers import (
     emoji_command,
     handle_emoji_text,
     handle_location,
+    handle_my_chat_member,
     handle_pref_callback,
     handle_video,
     map_command,
@@ -106,6 +108,7 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT, handle_emoji_text))
     application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
     try:
         async with application:

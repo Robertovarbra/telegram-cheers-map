@@ -9,7 +9,7 @@ from aiohttp import ClientTimeout, web
 
 from auth import extract_init_data, is_member, verify_init_data
 from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES
-from database import add_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip
+from database import add_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip, track
 from telegram_handlers import reverse_geocode
 
 # Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
@@ -275,7 +275,7 @@ async def handle_pins(request: web.Request) -> web.Response:
         return web.json_response({"error": "chat_id required"}, status=400)
     if not chat_id.lstrip("-").isdigit():
         return web.json_response({"error": "invalid chat_id"}, status=400)
-    _, err = await _authorize(request, int(chat_id))
+    data, err = await _authorize(request, int(chat_id))
     if err:
         return err
     try:
@@ -290,6 +290,10 @@ async def handle_pins(request: web.Request) -> web.Response:
         q = request.rel_url.query.get("q")
         trip_id_raw = request.rel_url.query.get("trip_id")
         trip_id = int(trip_id_raw) if trip_id_raw and trip_id_raw.isdigit() else None
+        # The frontend refetches on every filter change and pagination page; only the first
+        # unfiltered page corresponds to actually opening the map.
+        if offset == 0 and not any((user_ids_raw, date_from, date_to, q, trip_id_raw)):
+            track("map_opened", chat_id=int(chat_id), user_id=int(data["user"]["id"]))
         result = get_pins(int(chat_id), limit=limit, offset=offset, user_ids=user_ids, date_from=date_from, date_to=date_to, q=q, trip_id=trip_id)
         return web.json_response(result)
     except Exception:
@@ -364,6 +368,7 @@ async def handle_submit_location(request: web.Request) -> web.Response:
         country_code=country_code,
         trip_id=trip["id"] if trip else None,
     )
+    track("pin_created", chat_id=chat_id, user_id=user_id)
 
     # Best-effort: clear the bot's "tap to share location" prompt from the group, matching the
     # attachment-menu flow's cleanup. The shared bot instance lives on the app (see main.py).
