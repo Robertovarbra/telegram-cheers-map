@@ -77,13 +77,13 @@ sudo systemctl start cheers-bot    # iniciar ahora
 
 ### 4. Servicio systemd — Cloudflare Tunnel
 
-Si usas Cloudflare Tunnel para exponer el mapa sin abrir puertos, crea `/etc/systemd/system/cloudflared-tunnel.service`:
+Si usas Cloudflare Tunnel para exponer el mapa sin abrir puertos, crea `/etc/systemd/system/cloudflared.service`:
 
 > **Nota:** Debes autenticar y configurar el tunnel con `cloudflared tunnel login` y `cloudflared tunnel create cheersmap`. La configuración queda en `~/.cloudflared/`.
 
 ```ini
 [Unit]
-Description=Cloudflare Tunnel — Cheers Map
+Description=Cloudflare Tunnel
 After=network.target
 
 [Service]
@@ -99,15 +99,55 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable cloudflared-tunnel    # arranque automático al bootear
-sudo systemctl start cloudflared-tunnel     # iniciar ahora
+sudo systemctl enable cloudflared    # arranque automático al bootear
+sudo systemctl start cloudflared     # iniciar ahora
+```
+
+> **El nombre del servicio es el nombre del fichero**, no el `Description`. Si el fichero es `cloudflared.service`, los comandos son `systemctl start cloudflared`. `cloudflared-tunnel` sólo existiría si crearas `/etc/systemd/system/cloudflared-tunnel.service`; si no coincide, systemd responde `Unit ... not found`.
+
+#### 4.1 Instalar el binario — `armhf` no funciona en ARMv6 (Pi 1 / Zero / B+)
+
+El `.deb` oficial instala la variante **`armhf`, compilada para ARMv7**. En un Pi con `uname -m` = `armv6l` el proceso muere al instante con `Illegal instruction` (`status=4/ILL`) y el servicio entra en bucle de reinicio. Hay que usar el binario **`arm`**:
+
+```bash
+uname -m    # armv6l -> usa cloudflared-linux-arm (NO dpkg --print-architecture, que da armhf)
+curl -L -o /tmp/cloudflared \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm
+sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+cloudflared --version
+```
+
+> **Ojo con el orden:** el `.deb` crea en su `postinst` el symlink `/usr/local/bin/cloudflared -> /usr/bin/cloudflared`, y su `postrm` hace `rm -f /usr/local/bin/cloudflared`. Si purgas el paquete **después** de copiar el binario manual, te borra el binario. Purga primero y copia después:
+
+```bash
+sudo dpkg --purge cloudflared    # elimina el .deb armhf y sus restos
+# ...y ahora sí, copia el binario arm a /usr/local/bin/cloudflared
+```
+
+#### 4.2 Actualizar cloudflared
+
+`ExecStart` apunta a `/usr/local/bin/cloudflared`, así que instalar el `.deb` (que va a `/usr/bin`) **no actualiza nada** de lo que corre el servicio. Se actualiza el binario a mano y se reinicia:
+
+```bash
+curl -L -o /tmp/cloudflared \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm
+sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+sudo systemctl restart cloudflared    # "restart", no "start": si ya corre, "start" no hace nada
+```
+
+Verifica que el proceso vivo es el binario nuevo. `cloudflared --version` no basta (resuelve por `PATH` y puede mostrar otro binario); hay que mirar el ejecutable real del proceso:
+
+```bash
+PID=$(systemctl show -p MainPID --value cloudflared)
+readlink -f /proc/$PID/exe     # debe ser /usr/local/bin/cloudflared
+journalctl -u cloudflared -n 20 --no-pager | grep "Registered tunnel connection"
 ```
 
 ### 5. Verificar que ambos arrancan automáticamente
 
 ```bash
-sudo systemctl is-enabled cheers-bot            # debe decir "enabled"
-sudo systemctl is-enabled cloudflared-tunnel    # debe decir "enabled"
+sudo systemctl is-enabled cheers-bot        # debe decir "enabled"
+sudo systemctl is-enabled cloudflared       # debe decir "enabled"
 ```
 
 En cada reinicio del Pi, ambos servicios se inician solos.
