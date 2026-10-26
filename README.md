@@ -53,7 +53,8 @@ Crear `/etc/systemd/system/cheers-bot.service`:
 ```ini
 [Unit]
 Description=Cheers Map Bot
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=notify
@@ -73,6 +74,12 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable cheers-bot   # arranque automático al bootear
 sudo systemctl start cheers-bot    # iniciar ahora
+```
+
+> `Wants=`/`After=network-online.target` hacen que el servicio espere a que haya **ruta y DNS reales**, no sólo a que la interfaz esté levantada: `network.target` no espera a DHCP ni a la resolución. En hardware lento (Pi 1/Zero/B+) evita que el bot y el tunnel arranquen antes de tener red y se pasen el primer par de minutos reintentando. La misma directiva va en la unit del tunnel (sección 4), y depende de que exista un proveedor de *wait-online* habilitado (`NetworkManager-wait-online` o `systemd-networkd-wait-online`); sin él el target se alcanza al instante y no aporta nada.
+
+```bash
+systemctl list-unit-files | grep wait-online   # debe haber uno "enabled"
 ```
 
 ### 4. Servicio systemd — Cloudflare Tunnel
@@ -161,7 +168,7 @@ journalctl -u cloudflared -b --no-pager | grep -c "Registered tunnel connection"
 curl -s -o /dev/null -w "%{http_code}\n" https://cheersmap.robertoapproved.com/api/health
 ```
 
-> **En un Pi lento (1/Zero/B+) hay una ventana muerta de varios minutos tras el reinicio.** En un Pi B+ medido: boot → cloudflared arranca a los ~2 min → precheck a los ~4 min → primeras conexiones registradas a los ~4 min y medio → `cheers-bot` manda `READY=1` a los ~5 min. Durante esa ventana la URL devuelve **530** y es normal: ni el tunnel está conectado ni el servidor web está escuchando. No lo confundas con un fallo; confirma con `journalctl -u cheers-bot -b` que el bot está inicializando.
+> **En un Pi lento (1/Zero/B+) hay una ventana muerta de varios minutos tras el reinicio.** En un Pi B+ el arranque completo (boot → URL 200) ronda los 4–5 minutos: cloudflared tarda un par de minutos en arrancar y el bot manda `READY=1` poco antes de que la URL empiece a responder. Durante esa ventana la URL devuelve **530** y es normal: ni el tunnel está conectado ni el servidor web está escuchando. No lo confundas con un fallo; confirma con `journalctl -u cheers-bot -b` que el bot está inicializando.
 
 En cada reinicio del Pi, ambos servicios se inician solos.
 
@@ -196,8 +203,17 @@ ssh-copy-id -i ~/.ssh/gh-actions-deploy.pub pi@<IP_LOCAL_DEL_PI>
 En el Pi:
 
 ```bash
-echo "pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart cheers-bot" | sudo tee /etc/sudoers.d/cheers-bot
+sudo tee /etc/sudoers.d/cheers-bot >/dev/null <<'EOF'
+pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart cheers-bot, /usr/bin/systemctl restart cloudflared, /usr/bin/systemctl daemon-reload
+EOF
+sudo chmod 0440 /etc/sudoers.d/cheers-bot
+sudo chown root:root /etc/sudoers.d/cheers-bot
+sudo visudo -c
 ```
+
+> El fichero debe quedar `root:root` y modo **0440**. Con `0644` sudo lo **ignora** (avisa y sigue) y `visudo -c` termina en error; el síntoma en runtime es `sudo: a password is required` en mitad de un deploy. Valida con `sudo visudo -c` (el `sudoers` completo, incluidos los ficheros de `/etc/sudoers.d/` que de verdad se cargan), no con `visudo -cf fichero`, que sólo mira ese fichero.
+
+> El deploy sólo necesita `restart cheers-bot`; `restart cloudflared` y `daemon-reload` se añaden para poder tocar las units a mano sin contraseña. No uses `ALL` ni `systemctl *`: si el usuario de SSH se compromete, la regla es lo único que separa al atacante de root.
 
 **c. OAuth client en Tailscale**
 
@@ -251,7 +267,4 @@ Y pegar:
 
 Esto verifica cada minuto que el endpoint responda. Si falla (proceso vivo pero DB corrupta, SD llena, etc.), reinicia el servicio.
 
-> **Nota:** Para que `sudo systemctl` funcione sin contraseña desde cron, agregá en `/etc/sudoers.d/cheers-bot`:
-> ```
-> pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart cheers-bot
-> ```
+> **Nota:** Esto depende de la regla `NOPASSWD` de `/etc/sudoers.d/cheers-bot` (sección 6.2, punto *b*). Si el fichero falta o tiene permisos incorrectos, el cron falla **en silencio**: verás el health check fallar cada minuto en `journalctl` pero el servicio no se reiniciará. Es la misma regla, no la dupliques aquí.
