@@ -79,12 +79,13 @@ sudo systemctl start cheers-bot    # iniciar ahora
 
 Si usas Cloudflare Tunnel para exponer el mapa sin abrir puertos, crea `/etc/systemd/system/cloudflared.service`:
 
-> **Nota:** Debes autenticar y configurar el tunnel con `cloudflared tunnel login` y `cloudflared tunnel create cheersmap`. La configuración queda en `~/.cloudflared/`.
+> **Nota:** Debes autenticar y configurar el tunnel con `cloudflared tunnel login` y `cloudflared tunnel create cheersmap`. La configuración queda en `~/.cloudflared/`. El `User=` del servicio debe ser el mismo que hizo el `login`: las credenciales se leen de su `$HOME` (o de la ruta absoluta de `credentials-file` en `config.yml`).
 
 ```ini
 [Unit]
 Description=Cloudflare Tunnel
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
@@ -96,6 +97,8 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 ```
+
+> `After=network-online.target` no es adorno: `network.target` sólo ordena contra el arranque de la red, **no espera a que haya ruta/DNS**. Sin él, cloudflared arranca antes de tener conectividad y se pasa un par de minutos reintentando antes del `precheck`; mientras no registra conexiones, la URL pública devuelve **530**. Si la unit ya existe, añade `Wants=`/`After=network-online.target` en `[Unit]` y luego `sudo systemctl daemon-reload && sudo systemctl restart cloudflared`.
 
 ```bash
 sudo systemctl daemon-reload
@@ -145,10 +148,20 @@ journalctl -u cloudflared -n 20 --no-pager | grep "Registered tunnel connection"
 
 ### 5. Verificar que ambos arrancan automáticamente
 
+`is-enabled` sólo dice que hay un symlink en `multi-user.target.wants`; no dice que el servicio arranque bien. Para comprobarlo de verdad hay que reiniciar y mirar:
+
 ```bash
-sudo systemctl is-enabled cheers-bot        # debe decir "enabled"
-sudo systemctl is-enabled cloudflared       # debe decir "enabled"
+sudo systemctl is-enabled cheers-bot cloudflared   # enabled / enabled
+sudo systemctl is-active cheers-bot cloudflared    # active / active
+
+# ¿el tunnel está realmente conectado? deben salir 4 líneas (conexiones por defecto)
+journalctl -u cloudflared -b --no-pager | grep -c "Registered tunnel connection"
+
+# y la URL pública responde
+curl -s -o /dev/null -w "%{http_code}\n" https://cheersmap.robertoapproved.com/api/health
 ```
+
+> **En un Pi lento (1/Zero/B+) hay una ventana muerta de varios minutos tras el reinicio.** En un Pi B+ medido: boot → cloudflared arranca a los ~2 min → precheck a los ~4 min → primeras conexiones registradas a los ~4 min y medio → `cheers-bot` manda `READY=1` a los ~5 min. Durante esa ventana la URL devuelve **530** y es normal: ni el tunnel está conectado ni el servidor web está escuchando. No lo confundas con un fallo; confirma con `journalctl -u cheers-bot -b` que el bot está inicializando.
 
 En cada reinicio del Pi, ambos servicios se inician solos.
 
