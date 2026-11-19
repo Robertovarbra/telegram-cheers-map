@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -6,10 +8,12 @@ import tempfile
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-
-from PIL import Image, ImageDraw, ImageFont
+from typing import TYPE_CHECKING
 
 from config import REEL_CACHE_DIR, REEL_CACHE_MAX_BYTES, REEL_CLIP_MAX_SEC, logger
+
+if TYPE_CHECKING:
+    from PIL import ImageFont
 
 # Palette matching web/js/config.js so friends without a custom pin_color get the same ring color
 # in their Trip Recap Reel as on the map.
@@ -18,7 +22,7 @@ _PALETTE = ("#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c", "#
 # Serialize FFmpeg renders so a Raspberry Pi never runs multiple heavy encodes concurrently.
 _render_semaphore = asyncio.Semaphore(1)
 _reel_locks: dict[str, asyncio.Lock] = {}
-_reel_lru: "OrderedDict[str, int]" = OrderedDict()
+_reel_lru: OrderedDict[str, int] = OrderedDict()
 _reel_cache_total = 0
 _reel_cache_ready = False
 
@@ -37,6 +41,8 @@ _FONT_CANDIDATES_REG = (
 
 
 def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    from PIL import ImageFont
+
     candidates = _FONT_CANDIDATES_BOLD if bold else _FONT_CANDIDATES_REG
     for path in candidates:
         if Path(path).exists():
@@ -77,6 +83,8 @@ def _truncate(text: str, max_chars: int) -> str:
 
 def _render_circle_mask(diameter: int, out_path: Path) -> None:
     """Create a 2x-supersampled anti-aliased white circle mask on a black background."""
+    from PIL import Image, ImageDraw
+
     ss = diameter * 2
     img = Image.new("L", (ss, ss), 0)
     draw = ImageDraw.Draw(img)
@@ -101,6 +109,8 @@ def _render_overlay_png(
 ) -> None:
     """Render a transparent 9:16 RGBA card: subtle scrims, colored circular ring, trip header,
     author/location caption, and optional free-tier watermark."""
+    from PIL import Image, ImageDraw
+
     scale = width / 720.0
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
