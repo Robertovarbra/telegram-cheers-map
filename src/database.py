@@ -682,3 +682,78 @@ def get_pins_meta(chat_id):
         return {"users": users, "min_date": row[0], "max_date": row[1], "trips": get_trips(chat_id)}
     finally:
         conn.close()
+
+
+def delete_pin(chat_id, pin_id, user_id):
+    """Delete a single pin iff it belongs to both `chat_id` and `user_id` (owner-only).
+
+    Runs inside a BEGIN IMMEDIATE transaction so concurrent deletes can't double-succeed.
+    Returns ("ok", {"id", "trip_id", "video_file_id"}), ("not_found", None), or ("forbidden", None)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT user_id, trip_id, video_file_id FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        row = c.fetchone()
+        if not row:
+            c.execute("COMMIT")
+            return "not_found", None
+        owner_id, trip_id, video_file_id = row
+        if owner_id != user_id:
+            c.execute("COMMIT")
+            return "forbidden", None
+        c.execute("DELETE FROM pins WHERE id = ? AND chat_id = ? AND user_id = ?", (pin_id, chat_id, user_id))
+        c.execute("COMMIT")
+        return "ok", {"id": pin_id, "trip_id": trip_id, "video_file_id": video_file_id}
+    finally:
+        conn.close()
+
+
+def get_analytics_summary(days=7):
+    """Aggregate high-level product health metrics over the last `days` plus all-time totals."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        c.execute("SELECT COUNT(*), COUNT(DISTINCT chat_id), COUNT(DISTINCT user_id) FROM pins")
+        total_pins, total_chats, total_users = c.fetchone()
+
+        c.execute("SELECT COUNT(*), SUM(CASE WHEN closed_at IS NULL THEN 1 ELSE 0 END) FROM trips")
+        total_trips, open_trips = c.fetchone()
+        open_trips = open_trips or 0
+
+        c.execute("SELECT event, COUNT(*) FROM analytics_events WHERE created_at >= ? GROUP BY event", (since,))
+        events = dict(c.fetchall())
+
+        c.execute("SELECT COUNT(DISTINCT chat_id) FROM analytics_events WHERE created_at >= ? AND chat_id IS NOT NULL", (since,))
+        active_chats = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM analytics_events WHERE created_at >= ? AND user_id IS NOT NULL", (since,))
+        active_users = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM pins WHERE created_at >= ?", (since,))
+        pins_in_window = c.fetchone()[0]
+
+        c.execute(
+            "SELECT chat_id, COUNT(*) AS cnt FROM pins WHERE created_at >= ? GROUP BY chat_id ORDER BY cnt DESC LIMIT 5",
+            (since,),
+        )
+        top_chats = [{"chat_id": r[0], "pins": r[1]} for r in c.fetchall()]
+
+        return {
+            "days": days,
+            "total_pins": total_pins,
+            "total_chats": total_chats,
+            "total_users": total_users,
+            "total_trips": total_trips,
+            "open_trips": open_trips,
+            "active_chats": active_chats,
+            "active_users": active_users,
+            "pins_in_window": pins_in_window,
+            "events": events,
+            "top_chats": top_chats,
+        }
+    finally:
+        conn.close()

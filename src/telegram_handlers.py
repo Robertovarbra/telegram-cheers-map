@@ -5,13 +5,15 @@ from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarku
 from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
-from config import BOT_USERNAME, logger
+from auth import is_member
+from config import ADMIN_USER_IDS, BOT_USERNAME, logger
 from database import (
     add_pin,
     close_trip,
     create_trip,
     delete_chat_pins,
     get_all_chat_ids,
+    get_analytics_summary,
     get_chat_setting,
     get_chat_trip_users,
     get_open_trip_for_member,
@@ -45,6 +47,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Invalid link.")
             return
 
+        # Enforce the same tenant-isolation invariant as the Mini App API: only current members of
+        # the source chat can watch its pins. Checked before get_pin so non-members can't probe IDs.
+        user = update.effective_user
+        if not user or not await is_member(context.bot, chat_id, user.id):
+            await update.message.reply_text("You don't have access to this cheers.")
+            return
+
         pin = get_pin(chat_id, msg_id)
         if not pin:
             await update.message.reply_text("This cheers pin no longer exists.")
@@ -63,12 +72,70 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"Could not send video: {e}")
         return
 
+    reply_markup = None
+    if BOT_USERNAME:
+        add_url = f"https://t.me/{BOT_USERNAME}?startgroup=true&admin=pin_messages+delete_messages"
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Add to a Group", url=add_url)]])
+
     await update.message.reply_text(
-        "Send a telegram video message in a group where I'm an admin, then share your location — "
-        "I'll pin it on the map!\n"
-        "Use /map to view all cheers.\n"
-        "For better experience, allow the bot to pinned messages and delete messages."
+        "🍻 Cheers Map\n"
+        "Real, unfiltered video-note moments with your friends — pinned to the world map. No filters, no uploads, no feed.\n\n"
+        "How it works:\n"
+        "1. Add me to a friend group\n"
+        "2. Send a circular Telegram video note in the group\n"
+        "3. Tap 📍 Share location to pin it on the map\n"
+        "4. Use /map to explore & /trip to group travels together\n\n"
+        "Tip: allow pinning and deleting messages so I can keep the group chat tidy.",
+        reply_markup=reply_markup,
     )
+
+
+async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Internal analytics snapshot for bot admins. Strictly DM-only and gated by ADMIN_USER_IDS."""
+    user = update.effective_user
+    if not user or user.id not in ADMIN_USER_IDS:
+        return  # fail closed: don't even reveal the command exists to non-admins
+
+    if update.effective_chat.type != Chat.PRIVATE:
+        await update.message.reply_text("Run /admin_stats in a private chat with me.")
+        return
+
+    days = 7
+    if context.args and context.args[0].isdigit():
+        days = max(1, min(365, int(context.args[0])))
+
+    s = get_analytics_summary(days=days)
+    ev = s["events"]
+    added = ev.get("bot_added", 0)
+    removed = ev.get("bot_removed", 0)
+    started = ev.get("pin_started", 0)
+    created = ev.get("pin_created", 0)
+    deleted = ev.get("pin_deleted", 0)
+    map_cmd = ev.get("map_command", 0)
+    map_open = ev.get("map_opened", 0)
+    conv = f"{(created / started * 100):.0f}%" if started else "n/a"
+
+    lines = [
+        f"📊 Cheers Map Stats (last {days}d)",
+        "",
+        "All-time:",
+        f"• Pins: {s['total_pins']} across {s['total_chats']} chats ({s['total_users']} users)",
+        f"• Trips: {s['total_trips']} total ({s['open_trips']} open)",
+        "",
+        f"Last {days}d activity:",
+        f"• Active: {s['active_chats']} chats, {s['active_users']} users",
+        f"• Installs: +{added} / -{removed} (net {added - removed:+d})",
+        f"• Pin funnel: {started} started → {created} created ({conv})",
+        f"• Pins deleted: {deleted}",
+        f"• Map: {map_cmd} /map cmds → {map_open} map opens",
+    ]
+    if s["top_chats"]:
+        lines.append("")
+        lines.append(f"Top chats ({days}d):")
+        for row in s["top_chats"]:
+            lines.append(f"• {row['chat_id']}: {row['pins']} pins")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -721,3 +788,15 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
     event = "bot_added" if now_in else "bot_removed"
     track(event, chat_id=cm.chat.id, user_id=actor_id)
     logger.info("Tracked %s for chat %s (by user %s)", event, cm.chat.id, actor_id)
+
+    if event == "bot_added":
+        try:
+            await context.bot.send_message(
+                cm.chat.id,
+                "🍻 Cheers Map is ready!\n"
+                "Send a circular video note in this group, then tap 📍 Share location to drop your first pin on the map.\n\n"
+                "Commands: /map · /trip · /color · /emoji\n"
+                "(Granting pin & delete-message permissions keeps the chat tidy.)",
+            )
+        except Exception as e:
+            logger.info("Could not send welcome message to chat %s: %s", cm.chat.id, e)

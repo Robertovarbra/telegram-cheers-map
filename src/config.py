@@ -36,3 +36,17 @@ WEB_DIR = BASE_DIR / "web"
 # Bounded by an LRU eviction; size is env-tunable.
 VIDEO_CACHE_DIR = BASE_DIR / "video_cache"
 VIDEO_CACHE_MAX_BYTES = int(os.getenv("VIDEO_CACHE_MAX_MB", "512")) * 1024 * 1024
+
+
+def _parse_admin_ids() -> frozenset[int]:
+    raw = os.getenv("ADMIN_USER_IDS") or os.getenv("ADMIN_USER_ID") or ""
+    ids = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.add(int(part))
+    return frozenset(ids)
+
+
+# Telegram user IDs allowed to invoke /admin_stats in DM. Empty by default (fail closed).
+ADMIN_USER_IDS: frozenset[int] = _parse_admin_ids()

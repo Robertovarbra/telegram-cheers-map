@@ -143,6 +143,11 @@ export function applyTripCountsDelta(moves) {
 }
 
 export function populateFilters(meta) {
+  if (meta.current_user_id != null) {
+    state.currentUserId = meta.current_user_id;
+  } else if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) {
+    state.currentUserId = window.Telegram.WebApp.initDataUnsafe.user.id;
+  }
   state.trips = meta.trips || [];
   renderTripChips();
   document.getElementById('trip-filters').addEventListener('click', function(e) {

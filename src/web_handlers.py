@@ -8,8 +8,8 @@ from aiohttp import ClientSession as AiohttpClient
 from aiohttp import ClientTimeout, web
 
 from auth import extract_init_data, is_member, verify_init_data
-from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES
-from database import add_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip, track
+from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES, logger
+from database import add_pin, delete_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip, track
 from telegram_handlers import reverse_geocode
 
 # Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
@@ -281,7 +281,7 @@ async def handle_pins(request: web.Request) -> web.Response:
     try:
         limit = int(request.rel_url.query.get("limit", 500))
         offset = int(request.rel_url.query.get("offset", 0))
-        limit = max(limit, 1)
+        limit = min(max(limit, 1), 500)
         offset = max(offset, 0)
         user_ids_raw = request.rel_url.query.get("user_ids")
         user_ids = user_ids_raw.split(",") if user_ids_raw else None
@@ -297,6 +297,7 @@ async def handle_pins(request: web.Request) -> web.Response:
         result = get_pins(int(chat_id), limit=limit, offset=offset, user_ids=user_ids, date_from=date_from, date_to=date_to, q=q, trip_id=trip_id)
         return web.json_response(result)
     except Exception:
+        logger.warning("handle_pins failed for chat %s", chat_id, exc_info=True)
         return web.json_response({"error": "internal error"}, status=400)
 
 
@@ -310,13 +311,15 @@ async def handle_pins_meta(request: web.Request) -> web.Response:
         return web.json_response({"error": "chat_id required"}, status=400)
     if not chat_id.lstrip("-").isdigit():
         return web.json_response({"error": "invalid chat_id"}, status=400)
-    _, err = await _authorize(request, int(chat_id))
+    data, err = await _authorize(request, int(chat_id))
     if err:
         return err
     try:
         result = get_pins_meta(int(chat_id))
+        result["current_user_id"] = int(data["user"]["id"])
         return web.json_response(result)
     except Exception:
+        logger.warning("handle_pins_meta failed for chat %s", chat_id, exc_info=True)
         return web.json_response({"error": "internal error"}, status=400)
 
 
@@ -423,3 +426,40 @@ async def handle_pin_trip(request: web.Request) -> web.Response:
     if not updated:
         return web.json_response({"error": "not found"}, status=404)
     return web.json_response({"ok": True, "updated": updated})
+
+
+async def handle_delete_pin(request: web.Request) -> web.Response:
+    """Delete a single pin owned by the authenticated caller.
+
+    Strictly owner-only: compares the pin's user_id against the signed initData user.id (never a
+    client-supplied id). Returns 404 if the pin doesn't exist in this chat, 403 if owned by
+    someone else."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+    user_id = int(data["user"]["id"])
+
+    try:
+        body = await request.json()
+        raw_id = body["pin_id"]
+        if isinstance(raw_id, bool):
+            raise TypeError
+        pin_id = int(raw_id)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    status, info = delete_pin(chat_id, pin_id, user_id)
+    if status == "not_found":
+        return web.json_response({"error": "not found"}, status=404)
+    if status == "forbidden":
+        return web.json_response({"error": "forbidden"}, status=403)
+
+    track("pin_deleted", chat_id=chat_id, user_id=user_id)
+    return web.json_response({"ok": True, "pin_id": pin_id, "trip_id": info["trip_id"]})

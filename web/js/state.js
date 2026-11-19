@@ -3,6 +3,7 @@
 // since ES module imports are read-only bindings.
 export const state = {
   chatId: null,
+  currentUserId: null,
   map: null,
   markerGroup: null,
   allPins: [],

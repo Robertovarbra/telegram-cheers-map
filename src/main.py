@@ -16,6 +16,7 @@ from telegram.ext import (
 from config import TOKEN, WEB_DIR, WEB_HOST, WEB_PORT, logger
 from database import delete_stale_pending_pins, init_db, migrate_db
 from telegram_handlers import (
+    admin_stats_command,
     cleanup_inactive_chats,
     color_command,
     emoji_command,
@@ -31,6 +32,7 @@ from telegram_handlers import (
 from web_handlers import (
     handle_bot_info,
     handle_chat,
+    handle_delete_pin,
     handle_health,
     handle_pin_trip,
     handle_pins,
@@ -75,6 +77,7 @@ async def main() -> None:
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_post("/api/submit-location", handle_submit_location)
     web_app.router.add_post("/api/pin-trip", handle_pin_trip)
+    web_app.router.add_post("/api/delete-pin", handle_delete_pin)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
 
     async def index_handler(_request: web.Request) -> web.FileResponse:
@@ -100,6 +103,7 @@ async def main() -> None:
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("admin_stats", admin_stats_command))
     application.add_handler(CommandHandler("map", map_command))
     application.add_handler(CommandHandler("color", color_command))
     application.add_handler(CommandHandler("emoji", emoji_command))
