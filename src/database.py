@@ -825,14 +825,11 @@ def get_chat_stats(chat_id):
         countries: dict[str, dict] = {}
         cities: dict[tuple[str, str], dict] = {}
         users: dict[int, dict] = {}
-        total_km = 0.0
-        prev_coords = None
+        # Track distance per user chronologically (not interleaved across different friends), and
+        # ignore <100 m GPS drift so staying at one bar doesn't inflate traveled distance.
+        prev_coords_by_user: dict[int, tuple[float, float]] = {}
 
         for uid, uname, lat, lng, city, country, cc, _created_at, color, emoji in rows:
-            if prev_coords is not None:
-                total_km += _haversine_km(prev_coords[0], prev_coords[1], lat, lng)
-            prev_coords = (lat, lng)
-
             cc_norm = (cc or "").strip().lower()
             if country:
                 key = cc_norm or country.lower()
@@ -858,16 +855,26 @@ def get_chat_stats(chat_id):
                     "pin_color": color or None,
                     "pin_emoji": emoji or None,
                     "pin_count": 0,
+                    "distance_km": 0.0,
                     "_countries": set(),
                     "_cities": set(),
                 }
                 users[uid] = u
+            prev = prev_coords_by_user.get(uid)
+            if prev is not None:
+                step_km = _haversine_km(prev[0], prev[1], lat, lng)
+                if step_km >= 0.1:
+                    u["distance_km"] += step_km
+            prev_coords_by_user[uid] = (lat, lng)
+
             u["user_name"] = uname  # chronological scan -> freshest display name wins
             u["pin_count"] += 1
             if country:
                 u["_countries"].add(cc_norm or country.lower())
             if city:
                 u["_cities"].add((city.lower(), cc_norm))
+
+        total_km = sum(u["distance_km"] for u in users.values())
 
         leaderboard = [
             {
@@ -878,6 +885,7 @@ def get_chat_stats(chat_id):
                 "pin_count": u["pin_count"],
                 "country_count": len(u["_countries"]),
                 "city_count": len(u["_cities"]),
+                "distance_km": round(u["distance_km"]),
             }
             for u in sorted(users.values(), key=lambda x: (-x["pin_count"], x["user_name"].lower()))
         ]

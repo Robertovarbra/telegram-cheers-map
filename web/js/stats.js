@@ -80,6 +80,7 @@ function renderStats(data) {
       var placeBits = [];
       if (u.country_count) placeBits.push(u.country_count + (u.country_count === 1 ? ' country' : ' countries'));
       if (u.city_count) placeBits.push(u.city_count + (u.city_count === 1 ? ' city' : ' cities'));
+      if (u.distance_km > 0) placeBits.push(formatDistance(u.distance_km));
       var sub = placeBits.join(' · ') || 'No location metadata';
       html += '<button type="button" class="lb-row" data-uid="' + u.user_id + '">' +
         '<span class="lb-rank">' + (idx + 1) + '</span>' +
@@ -100,7 +101,10 @@ function renderStats(data) {
 export function openStats() {
   var overlay = document.getElementById('stats-overlay');
   if (!overlay) return;
-  document.getElementById('filter-panel').classList.add('hidden');
+  var filterOverlay = document.getElementById('filter-overlay');
+  if (filterOverlay) filterOverlay.classList.add('hidden');
+  var filterToggle = document.getElementById('filter-toggle');
+  if (filterToggle) { filterToggle.classList.remove('active'); filterToggle.setAttribute('aria-expanded', 'false'); }
   pauseMarkerVideos();
   overlay.classList.remove('hidden');
 

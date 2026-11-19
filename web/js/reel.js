@@ -177,7 +177,10 @@ export function openReel(tripId) {
   if (!overlay) return;
   activeTripId = tripId;
   busy = false;
-  document.getElementById('filter-panel').classList.add('hidden');
+  var filterOverlay = document.getElementById('filter-overlay');
+  if (filterOverlay) filterOverlay.classList.add('hidden');
+  var filterToggle = document.getElementById('filter-toggle');
+  if (filterToggle) { filterToggle.classList.remove('active'); filterToggle.setAttribute('aria-expanded', 'false'); }
   pauseMarkerVideos();
   setStatus('', false);
   renderReelControls(tripId);

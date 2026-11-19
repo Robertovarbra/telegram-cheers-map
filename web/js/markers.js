@@ -13,13 +13,11 @@ function getFilteredPins() {
   document.querySelectorAll('.filter-user-cb:checked').forEach(function(cb) { selected[cb.value] = true; });
   var dateFrom = document.getElementById('date-from').value;
   var dateTo = document.getElementById('date-to').value;
-  var bounds = document.getElementById('filter-bounds').checked ? state.map.getBounds() : null;
 
   return state.allPins.filter(function(p) {
     if (!selected[p.user_id]) return false;
     if (dateFrom && p.created_at < dateFrom) return false;
     if (dateTo && p.created_at.split('T')[0] > dateTo) return false;
-    if (bounds && !bounds.contains([p.latitude, p.longitude])) return false;
     return true;
   });
 }
