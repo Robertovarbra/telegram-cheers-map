@@ -5,25 +5,23 @@ import { getColor } from './color.js';
 import { authHeaders } from './api.js';
 import { PAGE_SIZE } from './config.js';
 import { renderMarkers } from './markers.js';
+import { pauseMarkerVideos, updateVideoPlayback } from './video.js';
 
 let renderTimer = null;  // debounce handle for scheduleRender()
+let usersById = {};      // user_id -> display name for active-filter banner labels
 
 function showAuthError() {
   document.getElementById('filter-count').textContent = '';
   if (document.getElementById('auth-error')) return;
   var d = document.createElement('div');
   d.id = 'auth-error';
-  d.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2000;background:#fff;padding:16px 20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.25);font-family:-apple-system,sans-serif;font-size:14px;color:#444;max-width:80%;text-align:center;';
+  d.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2000;background:var(--surface,#fff);padding:16px 20px;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,0.28);font-family:-apple-system,sans-serif;font-size:14px;color:var(--text,#444);max-width:80%;text-align:center;';
   d.textContent = 'Open this map from inside your Telegram group to view it.';
   document.body.appendChild(d);
 }
 
 export function updatePagination() {
   var el = document.getElementById('pagination');
-  if (hasClientFilters()) {
-    el.style.display = 'none';
-    return;
-  }
   var totalPages = Math.ceil(state.totalPins / PAGE_SIZE);
   if (totalPages <= 1) {
     el.style.display = 'none';
@@ -35,7 +33,7 @@ export function updatePagination() {
   document.getElementById('page-next').disabled = state.currentPage >= totalPages;
 }
 
-function getServerFilterParams() {
+export function getServerFilterParams() {
   var totalCbs = document.querySelectorAll('.filter-user-cb').length;
   var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
   var params = {};
@@ -82,11 +80,167 @@ export function loadPins(page, filterParams) {
     .catch(function(e) { console.error('Map error:', e); });
 }
 
-function hasClientFilters() {
-  return document.getElementById('filter-bounds').checked;
+function activeFilterList() {
+  var list = [];
+  if (state.selectedTripId !== null) list.push('trip');
+  var totalCbs = document.querySelectorAll('.filter-user-cb').length;
+  var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
+  if (totalCbs > 0 && checkedCbs.length !== totalCbs) list.push('users');
+  if (document.getElementById('filter-location').value.trim()) list.push('location');
+  if (document.getElementById('date-from').value || document.getElementById('date-to').value) list.push('date');
+  return list;
+}
+
+export function openFilters() {
+  var overlay = document.getElementById('filter-overlay');
+  var btn = document.getElementById('filter-toggle');
+  if (!overlay) return;
+  pauseMarkerVideos();
+  overlay.classList.remove('hidden');
+  if (btn) {
+    btn.classList.add('active');
+    btn.setAttribute('aria-expanded', 'true');
+  }
+}
+
+export function closeFilters() {
+  var overlay = document.getElementById('filter-overlay');
+  var btn = document.getElementById('filter-toggle');
+  if (!overlay || overlay.classList.contains('hidden')) return;
+  overlay.classList.add('hidden');
+  if (btn) {
+    btn.classList.remove('active');
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  updateVideoPlayback();
+}
+
+export function resetAllFilters() {
+  if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+  state.selectedTripId = null;
+  document.querySelectorAll('.filter-user-cb').forEach(function (cb) { cb.checked = true; });
+  document.getElementById('filter-location').value = '';
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  renderTripChips();
+  updateFilterIndicators();
+  state.currentPage = 1;
+  state.skipBoundsFit = false;
+  loadPins(1, null);
+}
+
+function updateFilterIndicators() {
+  var active = activeFilterList();
+  var hasAny = active.length > 0;
+
+  var dot = document.getElementById('filter-active-dot');
+  if (dot) dot.classList.toggle('hidden', !hasAny);
+
+  var resetBtn = document.getElementById('filter-reset-all');
+  if (resetBtn) {
+    resetBtn.disabled = !hasAny;
+    resetBtn.classList.toggle('hidden', !hasAny);
+  }
+
+  var locClear = document.getElementById('location-clear');
+  if (locClear) locClear.classList.toggle('hidden', !document.getElementById('filter-location').value.trim());
+
+  var dateClear = document.getElementById('date-clear');
+  if (dateClear) dateClear.classList.toggle('hidden', !(document.getElementById('date-from').value || document.getElementById('date-to').value));
+
+  var banner = document.getElementById('trip-banner');
+  if (!banner) return;
+  var iconEl = document.getElementById('trip-banner-icon');
+  var nameEl = document.getElementById('trip-banner-name');
+  var countEl = document.getElementById('trip-banner-count');
+  var reelBtn = document.getElementById('trip-banner-reel');
+  var clearBtn = document.getElementById('trip-banner-clear');
+
+  if (state.selectedTripId !== null) {
+    var t = state.trips.find(function (x) { return x.id === state.selectedTripId; });
+    if (t) {
+      if (iconEl) iconEl.textContent = '🍻';
+      nameEl.textContent = t.name;
+      countEl.textContent = String(t.pin_count);
+      countEl.classList.remove('hidden');
+      if (reelBtn) reelBtn.classList.toggle('hidden', t.pin_count <= 0);
+      if (clearBtn) clearBtn.setAttribute('aria-label', 'Clear trip filter');
+      banner.classList.remove('hidden');
+      return;
+    }
+  }
+
+  if (reelBtn) reelBtn.classList.add('hidden');
+  countEl.classList.add('hidden');
+
+  if (!hasAny) {
+    banner.classList.add('hidden');
+    return;
+  }
+
+  // Show a compact 1-tap dismiss pill on the map for any non-trip filter (location, friend, dates).
+  if (active.length === 1) {
+    var only = active[0];
+    if (only === 'location') {
+      if (iconEl) iconEl.textContent = '📍';
+      nameEl.textContent = document.getElementById('filter-location').value.trim();
+    } else if (only === 'users') {
+      var checked = Array.from(document.querySelectorAll('.filter-user-cb:checked'));
+      if (iconEl) iconEl.textContent = '👤';
+      if (checked.length === 1) {
+        nameEl.textContent = usersById[checked[0].value] || '1 friend';
+      } else {
+        nameEl.textContent = checked.length + ' friends';
+      }
+    } else {
+      if (iconEl) iconEl.textContent = '📅';
+      nameEl.textContent = 'Date filter';
+    }
+  } else {
+    if (iconEl) iconEl.textContent = '🔎';
+    nameEl.textContent = active.length + ' filters';
+  }
+  if (clearBtn) clearBtn.setAttribute('aria-label', 'Reset all filters');
+  banner.classList.remove('hidden');
+}
+
+export function applyLocationFilter(query) {
+  var input = document.getElementById('filter-location');
+  if (!input) return;
+  state.selectedTripId = null;
+  renderTripChips();
+  document.querySelectorAll('.filter-user-cb').forEach(function (cb) { cb.checked = true; });
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  input.value = query || '';
+  updateFilterIndicators();
+  state.currentPage = 1;
+  state.skipBoundsFit = false;
+  loadPins(1, getServerFilterParams());
+}
+
+export function applyUserFilter(userId) {
+  var uidStr = String(userId);
+  var found = false;
+  document.querySelectorAll('.filter-user-cb').forEach(function (cb) {
+    var match = cb.value === uidStr;
+    cb.checked = match;
+    if (match) found = true;
+  });
+  if (!found) return;
+  state.selectedTripId = null;
+  renderTripChips();
+  document.getElementById('filter-location').value = '';
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  updateFilterIndicators();
+  state.currentPage = 1;
+  state.skipBoundsFit = false;
+  loadPins(1, getServerFilterParams());
 }
 
 function scheduleRender() {
+  updateFilterIndicators();
   if (renderTimer) clearTimeout(renderTimer);
   renderTimer = setTimeout(function() {
     var serverFilters = getServerFilterParams();
@@ -98,11 +252,6 @@ function scheduleRender() {
       renderMarkers();
     }
   }, 500);
-}
-
-function onMapMove() {
-  state.skipBoundsFit = true;
-  scheduleRender();
 }
 
 // Trip chips: single-select — tapping a chip filters the map to that trip (server-side), tapping
@@ -140,10 +289,21 @@ export function applyTripCountsDelta(moves) {
     if (counts[t.id]) t.pin_count = Math.max(0, t.pin_count + counts[t.id]);
   });
   renderTripChips();
+  updateFilterIndicators();
 }
 
 export function populateFilters(meta) {
+  if (meta.current_user_id != null) {
+    state.currentUserId = meta.current_user_id;
+  } else if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) {
+    state.currentUserId = window.Telegram.WebApp.initDataUnsafe.user.id;
+  }
+  if (meta.entitlements) state.entitlements = meta.entitlements;
+  if (meta.pricing) state.pricing = meta.pricing;
   state.trips = meta.trips || [];
+  if (state.initialTripId != null && state.trips.some(function (t) { return t.id === state.initialTripId; })) {
+    state.selectedTripId = state.initialTripId;
+  }
   renderTripChips();
   document.getElementById('trip-filters').addEventListener('click', function(e) {
     var chip = e.target.closest('.trip-chip');
@@ -155,12 +315,14 @@ export function populateFilters(meta) {
   });
 
   var sorted = meta.users.sort(function(a, b) { return a.user_name.localeCompare(b.user_name); });
+  usersById = {};
   var html = '';
   sorted.forEach(function(u) {
+    usersById[String(u.user_id)] = u.user_name;
     var dot = u.pin_emoji ? '<span class="emoji-dot">' + esc(u.pin_emoji) + '</span>' : '<span class="color-dot" style="background:' + esc(getColor(u.user_id, u.pin_color)) + '"></span>';
-    html += '<div class="filter-user"><input type="checkbox" class="filter-user-cb" value="' + u.user_id + '" checked>' +
+    html += '<label class="filter-user"><input type="checkbox" class="filter-user-cb" value="' + u.user_id + '" checked>' +
       dot +
-      '<label>' + esc(u.user_name) + '</label></div>';
+      '<span class="filter-user-name">' + esc(u.user_name) + '</span></label>';
   });
   document.getElementById('user-filters').innerHTML = html;
   document.getElementById('user-filters').addEventListener('change', scheduleRender);
@@ -190,15 +352,6 @@ export function populateFilters(meta) {
     scheduleRender();
   });
 
-  document.getElementById('filter-bounds').addEventListener('change', function() {
-    if (this.checked) {
-      state.map.on('moveend', onMapMove);
-    } else {
-      state.map.off('moveend', onMapMove);
-    }
-    scheduleRender();
-  });
-
   document.getElementById('filter-location').addEventListener('input', scheduleRender);
   document.getElementById('location-clear').addEventListener('click', function() {
     document.getElementById('filter-location').value = '';
@@ -206,10 +359,48 @@ export function populateFilters(meta) {
   });
 
   document.getElementById('filter-toggle').addEventListener('click', function() {
-    var p = document.getElementById('filter-panel');
-    p.classList.toggle('hidden');
-    this.textContent = p.classList.contains('hidden') ? '🔽' : '🔼';
+    var overlay = document.getElementById('filter-overlay');
+    if (overlay && overlay.classList.contains('hidden')) openFilters();
+    else closeFilters();
   });
+
+  var closeBtn = document.getElementById('filter-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeFilters);
+
+  var doneBtn = document.getElementById('filter-done');
+  if (doneBtn) doneBtn.addEventListener('click', closeFilters);
+
+  var resetAllBtn = document.getElementById('filter-reset-all');
+  if (resetAllBtn) resetAllBtn.addEventListener('click', resetAllFilters);
+
+  var filterOverlay = document.getElementById('filter-overlay');
+  if (filterOverlay) {
+    filterOverlay.addEventListener('click', function (e) {
+      if (e.target.closest('#filter-panel')) return;
+      closeFilters();
+    });
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeFilters();
+  });
+
+  var tripBannerClear = document.getElementById('trip-banner-clear');
+  if (tripBannerClear) {
+    tripBannerClear.addEventListener('click', function() {
+      if (state.selectedTripId !== null) {
+        state.selectedTripId = null;
+        renderTripChips();
+        updateFilterIndicators();
+        state.currentPage = 1;
+        state.skipBoundsFit = false;
+        loadPins(1, getServerFilterParams());
+      } else {
+        resetAllFilters();
+      }
+    });
+  }
+  updateFilterIndicators();
 }
 
 // Wire the pagination buttons (DOM is static, so this runs once at startup).

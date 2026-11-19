@@ -13,10 +13,11 @@ export function startLocationShare(cid) {
 
   document.body.innerHTML =
     '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:24px;'
-    + 'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;text-align:center;color:#222;">'
+    + 'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;text-align:center;'
+    + 'background:var(--bg,#fff);color:var(--text,#222);">'
     + '<div style="font-size:52px;margin-bottom:14px;">📍</div>'
     + '<div id="loc-title" style="font-size:18px;font-weight:600;margin-bottom:8px;">Share your location</div>'
-    + '<div id="loc-msg" style="font-size:14px;color:#666;margin-bottom:22px;max-width:300px;line-height:1.45;"><span class="spinner"></span>Getting your location…</div>'
+    + '<div id="loc-msg" style="font-size:14px;color:var(--text-muted,#666);margin-bottom:22px;max-width:300px;line-height:1.45;"><span class="spinner"></span>Getting your location…</div>'
     + '<button id="loc-btn" style="display:none;border:none;border-radius:10px;padding:12px 24px;font-size:15px;font-weight:600;cursor:pointer;'
     + 'background:' + esc(btnColor) + ';color:' + esc(btnText) + ';">Share my location</button>'
     + '</div>';

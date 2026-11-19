@@ -1,17 +1,54 @@
 // Entry point: parses the start params, branches to location-share mode, then boots the map.
 import { state } from './state.js';
-import { extractChatIdFromStartParam } from './util.js';
+import { extractChatIdFromStartParam, extractTripIdFromStartParam } from './util.js';
 import { authHeaders } from './api.js';
 import { startLocationShare } from './location-share.js';
-import { populateFilters, loadPins, initFilters } from './filters.js';
-import { renderMarkers } from './markers.js';
+import { populateFilters, loadPins, initFilters, getServerFilterParams } from './filters.js';
+import { renderMarkers, renderTripRoute } from './markers.js';
 import { updateVideoPlayback } from './video.js';
 import { initDetail } from './detail.js';
+import { initStats } from './stats.js';
+import { initReel } from './reel.js';
 
-if (window.Telegram && window.Telegram.WebApp) {
-  window.Telegram.WebApp.expand();
-  window.Telegram.WebApp.ready();
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) {
+  tg.expand();
+  tg.ready();
 }
+
+const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+function detectSystemTheme() {
+  if (tg && (tg.colorScheme === 'dark' || tg.colorScheme === 'light')) return tg.colorScheme;
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
+
+function syncThemeToggleIcon(theme) {
+  var btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  btn.setAttribute('aria-label', theme === 'dark' ? 'Switch to light map' : 'Switch to dark map');
+  btn.title = theme === 'dark' ? 'Switch to light map' : 'Switch to dark map';
+  btn.innerHTML = theme === 'dark'
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>';
+}
+
+function applyTheme(theme) {
+  state.theme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = state.theme;
+  syncThemeToggleIcon(state.theme);
+  if (tg) {
+    try {
+      var bg = state.theme === 'dark' ? '#17191d' : '#f4f5f7';
+      if (tg.setHeaderColor) tg.setHeaderColor(bg);
+      if (tg.setBackgroundColor) tg.setBackgroundColor(bg);
+    } catch (_) { /* older Telegram clients */ }
+  }
+  if (state.map && state.selectedTripId !== null) renderTripRoute();
+}
+
+applyTheme(detectSystemTheme());
 
 const params = new URLSearchParams(window.location.search);
 
@@ -40,14 +77,29 @@ if (locShare) {
 }
 
 state.chatId = chatId;
+var tripIdParam = params.get('trip_id');
+state.initialTripId = (tripIdParam && /^\d+$/.test(tripIdParam)) ? parseInt(tripIdParam, 10) : extractTripIdFromStartParam(startParam);
 
 const map = L.map('map').setView([0, 0], 2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; <a href="https://osm.org/copyright">OpenStreetMap</a>',
+state.map = map;
+state.tileLayer = L.tileLayer(TILE_URL, {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   maxZoom: 19,
 }).addTo(map);
-state.map = map;
+applyTheme(state.theme);
+// Route layer sits underneath markers so trip polylines never cover circular video bubbles.
+state.routeGroup = L.layerGroup().addTo(map);
 state.markerGroup = L.layerGroup().addTo(map);
+
+if (tg && tg.onEvent) {
+  tg.onEvent('themeChanged', function () { applyTheme(detectSystemTheme()); });
+}
+var themeBtn = document.getElementById('theme-toggle');
+if (themeBtn) {
+  themeBtn.addEventListener('click', function () {
+    applyTheme(state.theme === 'dark' ? 'light' : 'dark');
+  });
+}
 
 map.on('moveend', updateVideoPlayback);
 // Re-cluster as the zoom changes (pixel distances are zoom-dependent). Skip the bounds-fit so we
@@ -56,6 +108,8 @@ map.on('zoomend', function () { state.skipBoundsFit = true; renderMarkers(); });
 
 initFilters();
 initDetail();
+initStats();
+initReel();
 
 document.body.addEventListener('click', function (e) {
   var btn = e.target.closest('#view-all');
@@ -73,7 +127,7 @@ fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId), { headers: authHea
   })
   .then(function(meta) {
     populateFilters(meta);
-    loadPins(1);
+    loadPins(1, getServerFilterParams());
   })
   .catch(function(e) {
     console.error('Meta error:', e);

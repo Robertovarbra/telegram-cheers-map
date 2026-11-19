@@ -4,10 +4,13 @@ import { esc, relTime, placeholderGlyph, byNewest, tripDupDate } from './util.js
 import { getColor } from './color.js';
 import { videoUrl, apiPost } from './api.js';
 import { applyTripCountsDelta } from './filters.js';
+import { renderMarkers } from './markers.js';
+import { invalidateStats } from './stats.js';
 import { pauseMarkerVideos, updateVideoPlayback, teardownVideo } from './video.js';
 import { MAX_CONCURRENT_VIDEOS } from './config.js';
 
 let detailIdx = 0;     // which row in the open detail list is selected
+let deletingPin = false;
 // How the big player behaves: when loop is OFF (the default) it auto-advances newest -> oldest
 // (wrapping); when ON it replays the current clip. Always starts OFF when the player opens; the
 // loop button in the top bar toggles it.
@@ -179,6 +182,7 @@ function refreshRowTrips() {
 function renderTripBar() {
   var bar = document.getElementById('detail-trip-bar');
   var controls = document.getElementById('detail-controls');
+  updateDeleteButton();
   if (!state.trips.length) { bar.classList.add('hidden'); controls.classList.remove('hidden'); return; }
   bar.classList.remove('hidden');
   var view = document.getElementById('dtb-view');
@@ -297,6 +301,74 @@ function hapticBump() {
   } catch (_) { /* no haptics outside Telegram */ }
 }
 
+function hapticSuccess() {
+  try {
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+  } catch (_) { /* no haptics outside Telegram */ }
+}
+
+function updateDeleteButton() {
+  var btn = document.getElementById('detail-delete');
+  if (!btn) return;
+  var cur = state.detailPins && state.detailPins[detailIdx];
+  var canDelete = !inSelectMode() && !!cur && state.currentUserId != null && cur.user_id === state.currentUserId;
+  btn.classList.toggle('hidden', !canDelete);
+  btn.disabled = deletingPin;
+}
+
+function confirmAction(message, onConfirm) {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.showConfirm && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')) {
+    tg.showConfirm(message, function (ok) { if (ok) onConfirm(); });
+    return;
+  }
+  if (window.confirm(message)) onConfirm();
+}
+
+function notifyError(message) {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg && tg.showAlert && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')) {
+    tg.showAlert(message);
+    return;
+  }
+  window.alert(message);
+}
+
+function onDeletePin() {
+  if (deletingPin || !state.detailPins || !state.detailPins[detailIdx]) return;
+  var pin = state.detailPins[detailIdx];
+  if (state.currentUserId == null || pin.user_id !== state.currentUserId) return;
+
+  confirmAction('Delete this cheers from the map?', function () {
+    deletingPin = true;
+    updateDeleteButton();
+    apiPost('/api/delete-pin', state.chatId, { pin_id: pin.id })
+      .then(function (r) { if (!r.ok) throw new Error('failed ' + r.status); return r.json(); })
+      .then(function () {
+        deletingPin = false;
+        hapticSuccess();
+        invalidateStats();
+        state.allPins = state.allPins.filter(function (p) { return p.id !== pin.id; });
+        state.totalPins = Math.max(0, state.totalPins - 1);
+        if (pin.trip_id != null) applyTripCountsDelta([{ from: pin.trip_id, to: null }]);
+        state.detailPins = state.detailPins.filter(function (p) { return p.id !== pin.id; });
+        state.skipBoundsFit = true;
+        renderMarkers();
+        if (!state.detailPins.length) {
+          closeDetail();
+        } else {
+          renderDetailList();
+          selectDetail(Math.min(detailIdx, state.detailPins.length - 1));
+        }
+      })
+      .catch(function () {
+        deletingPin = false;
+        updateDeleteButton();
+        notifyError('Could not delete this cheers. Please try again.');
+      });
+  });
+}
+
 function selectDetail(i) {
   if (!state.detailPins || !state.detailPins[i]) return;
   detailIdx = i;
@@ -337,24 +409,27 @@ function closeDetail() {
   document.getElementById('detail-count').textContent = '';
   if (detailIo) { detailIo.disconnect(); detailIo = null; }
   state.detailPins = null;
+  deletingPin = false;
   loopMode = false;
   reverseMode = false;
   tripSel.clear();
   targetTripId = undefined;
+  updateDeleteButton();
   updateVideoPlayback();  // resume the map previews
 }
 
 // Wire the overlay's click handlers (DOM is static, so this runs once at startup).
 export function initDetail() {
   document.getElementById('play-all').addEventListener('click', playAll);
+  document.getElementById('detail-delete').addEventListener('click', onDeletePin);
   document.getElementById('mode-loop').addEventListener('click', toggleLoop);
   document.getElementById('mode-reverse').addEventListener('click', toggleReverse);
   document.getElementById('dtb-targets').addEventListener('click', onTargetChipClick);
   document.getElementById('pin-trip-apply').addEventListener('click', onTripApply);
   document.getElementById('pin-trip-cancel').addEventListener('click', exitSelect);
   document.getElementById('detail').addEventListener('click', function (e) {
-    // keep open when tapping the video, or the sheet (which holds the list and the mode toggle)
-    if (e.target.closest('#detail-big') || e.target.closest('#detail-sheet')) return;
+    // keep open when tapping the video, the delete button, or the sheet (which holds the list and the mode toggle)
+    if (e.target.closest('#detail-big') || e.target.closest('#detail-sheet') || e.target.closest('#detail-delete')) return;
     closeDetail();
   });
 

@@ -37,3 +37,22 @@ export function extractChatIdFromStartParam(sp) {
   var sep = rest.indexOf('_');
   return sep > 0 ? rest.slice(0, sep) : rest;
 }
+
+export function extractTripIdFromStartParam(sp) {
+  if (!sp) return null;
+  var m = sp.match(/_t(\d+)$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Convert a 2-letter ISO-3166 alpha-2 country code (e.g. "pt") to its regional indicator flag emoji.
+export function countryFlag(cc) {
+  if (!cc || typeof cc !== 'string' || !/^[a-zA-Z]{2}$/.test(cc)) return '';
+  var up = cc.toUpperCase();
+  return String.fromCodePoint(0x1F1E6 + up.charCodeAt(0) - 65, 0x1F1E6 + up.charCodeAt(1) - 65);
+}
+
+export function formatDistance(km) {
+  if (!km || km <= 0) return '0 km';
+  if (km >= 10000) return (km / 1000).toFixed(1).replace(/\.0$/, '') + 'k km';
+  return km.toLocaleString() + ' km';
+}

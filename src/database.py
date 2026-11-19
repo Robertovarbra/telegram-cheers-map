@@ -1,4 +1,5 @@
 import logging
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -151,6 +152,31 @@ def migrate_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_created ON analytics_events(event, created_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events(created_at)")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_charge_id TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                product_type TEXT NOT NULL,
+                target_id INTEGER,
+                amount_stars INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS chat_entitlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                entitlement_type TEXT NOT NULL,
+                target_id INTEGER,
+                granted_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entitlements_chat ON chat_entitlements(chat_id, entitlement_type, target_id)")
         conn.commit()
     finally:
         conn.close()
@@ -634,6 +660,7 @@ def delete_chat_pins(chat_id):
             c.execute("DELETE FROM trip_members WHERE trip_id IN (SELECT id FROM trips WHERE chat_id = ?)", (chat_id,))
             c.execute("DELETE FROM trips WHERE chat_id = ?", (chat_id,))
             c.execute("DELETE FROM chat_trip_users WHERE chat_id = ?", (chat_id,))
+            c.execute("DELETE FROM chat_entitlements WHERE chat_id = ?", (chat_id,))
             conn.commit()
         except Exception:
             pass
@@ -680,5 +707,311 @@ def get_pins_meta(chat_id):
         c.execute("SELECT MIN(created_at), MAX(created_at) FROM pins WHERE chat_id = ?", (chat_id,))
         row = c.fetchone()
         return {"users": users, "min_date": row[0], "max_date": row[1], "trips": get_trips(chat_id)}
+    finally:
+        conn.close()
+
+
+def delete_pin(chat_id, pin_id, user_id):
+    """Delete a single pin iff it belongs to both `chat_id` and `user_id` (owner-only).
+
+    Runs inside a BEGIN IMMEDIATE transaction so concurrent deletes can't double-succeed.
+    Returns ("ok", {"id", "trip_id", "video_file_id"}), ("not_found", None), or ("forbidden", None)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT user_id, trip_id, video_file_id FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        row = c.fetchone()
+        if not row:
+            c.execute("COMMIT")
+            return "not_found", None
+        owner_id, trip_id, video_file_id = row
+        if owner_id != user_id:
+            c.execute("COMMIT")
+            return "forbidden", None
+        c.execute("DELETE FROM pins WHERE id = ? AND chat_id = ? AND user_id = ?", (pin_id, chat_id, user_id))
+        c.execute("COMMIT")
+        return "ok", {"id": pin_id, "trip_id": trip_id, "video_file_id": video_file_id}
+    finally:
+        conn.close()
+
+
+def get_analytics_summary(days=7):
+    """Aggregate high-level product health metrics over the last `days` plus all-time totals."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        c.execute("SELECT COUNT(*), COUNT(DISTINCT chat_id), COUNT(DISTINCT user_id) FROM pins")
+        total_pins, total_chats, total_users = c.fetchone()
+
+        c.execute("SELECT COUNT(*), SUM(CASE WHEN closed_at IS NULL THEN 1 ELSE 0 END) FROM trips")
+        total_trips, open_trips = c.fetchone()
+        open_trips = open_trips or 0
+
+        c.execute("SELECT event, COUNT(*) FROM analytics_events WHERE created_at >= ? GROUP BY event", (since,))
+        events = dict(c.fetchall())
+
+        c.execute("SELECT COUNT(DISTINCT chat_id) FROM analytics_events WHERE created_at >= ? AND chat_id IS NOT NULL", (since,))
+        active_chats = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(DISTINCT user_id) FROM analytics_events WHERE created_at >= ? AND user_id IS NOT NULL", (since,))
+        active_users = c.fetchone()[0]
+
+        c.execute("SELECT COUNT(*) FROM pins WHERE created_at >= ?", (since,))
+        pins_in_window = c.fetchone()[0]
+
+        c.execute(
+            "SELECT chat_id, COUNT(*) AS cnt FROM pins WHERE created_at >= ? GROUP BY chat_id ORDER BY cnt DESC LIMIT 5",
+            (since,),
+        )
+        top_chats = [{"chat_id": r[0], "pins": r[1]} for r in c.fetchall()]
+
+        c.execute("SELECT COUNT(*), COALESCE(SUM(amount_stars), 0) FROM payments WHERE created_at >= ?", (since,))
+        payments_window, stars_window = c.fetchone()
+
+        c.execute("SELECT COUNT(*), COALESCE(SUM(amount_stars), 0) FROM payments")
+        payments_total, stars_total = c.fetchone()
+
+        return {
+            "days": days,
+            "total_pins": total_pins,
+            "total_chats": total_chats,
+            "total_users": total_users,
+            "total_trips": total_trips,
+            "open_trips": open_trips,
+            "active_chats": active_chats,
+            "active_users": active_users,
+            "pins_in_window": pins_in_window,
+            "events": events,
+            "top_chats": top_chats,
+            "payments_window": payments_window,
+            "stars_window": stars_window,
+            "payments_total": payments_total,
+            "stars_total": stars_total,
+        }
+    finally:
+        conn.close()
+
+
+def _haversine_km(lat1, lng1, lat2, lng2):
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def get_chat_stats(chat_id):
+    """Passport & leaderboard summary for a single chat (used by GET /api/stats)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT p.user_id, p.user_name, p.latitude, p.longitude, p.city, p.country, p.country_code, p.created_at,"
+            " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, '')"
+            " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+            " WHERE p.chat_id = ? ORDER BY p.created_at ASC",
+            (chat_id,),
+        )
+        rows = c.fetchall()
+
+        c.execute("SELECT COUNT(*) FROM trips WHERE chat_id = ?", (chat_id,))
+        total_trips = c.fetchone()[0]
+
+        countries: dict[str, dict] = {}
+        cities: dict[tuple[str, str], dict] = {}
+        users: dict[int, dict] = {}
+        # Track distance per user chronologically (not interleaved across different friends), and
+        # ignore <100 m GPS drift so staying at one bar doesn't inflate traveled distance.
+        prev_coords_by_user: dict[int, tuple[float, float]] = {}
+
+        for uid, uname, lat, lng, city, country, cc, _created_at, color, emoji in rows:
+            cc_norm = (cc or "").strip().lower()
+            if country:
+                key = cc_norm or country.lower()
+                entry = countries.get(key)
+                if entry is None:
+                    countries[key] = {"country": country, "country_code": cc_norm or None, "pin_count": 1}
+                else:
+                    entry["pin_count"] += 1
+
+            if city:
+                ckey = (city.lower(), cc_norm)
+                centry = cities.get(ckey)
+                if centry is None:
+                    cities[ckey] = {"city": city, "country_code": cc_norm or None, "pin_count": 1}
+                else:
+                    centry["pin_count"] += 1
+
+            u = users.get(uid)
+            if u is None:
+                u = {
+                    "user_id": uid,
+                    "user_name": uname,
+                    "pin_color": color or None,
+                    "pin_emoji": emoji or None,
+                    "pin_count": 0,
+                    "distance_km": 0.0,
+                    "_countries": set(),
+                    "_cities": set(),
+                }
+                users[uid] = u
+            prev = prev_coords_by_user.get(uid)
+            if prev is not None:
+                step_km = _haversine_km(prev[0], prev[1], lat, lng)
+                if step_km >= 0.1:
+                    u["distance_km"] += step_km
+            prev_coords_by_user[uid] = (lat, lng)
+
+            u["user_name"] = uname  # chronological scan -> freshest display name wins
+            u["pin_count"] += 1
+            if country:
+                u["_countries"].add(cc_norm or country.lower())
+            if city:
+                u["_cities"].add((city.lower(), cc_norm))
+
+        total_km = sum(u["distance_km"] for u in users.values())
+
+        leaderboard = [
+            {
+                "user_id": u["user_id"],
+                "user_name": u["user_name"],
+                "pin_color": u["pin_color"],
+                "pin_emoji": u["pin_emoji"],
+                "pin_count": u["pin_count"],
+                "country_count": len(u["_countries"]),
+                "city_count": len(u["_cities"]),
+                "distance_km": round(u["distance_km"]),
+            }
+            for u in sorted(users.values(), key=lambda x: (-x["pin_count"], x["user_name"].lower()))
+        ]
+
+        sorted_countries = sorted(countries.values(), key=lambda x: (-x["pin_count"], x["country"].lower()))
+        sorted_cities = sorted(cities.values(), key=lambda x: (-x["pin_count"], x["city"].lower()))[:20]
+
+        return {
+            "total_pins": len(rows),
+            "total_users": len(users),
+            "total_trips": total_trips,
+            "total_countries": len(countries),
+            "total_cities": len(cities),
+            "total_distance_km": round(total_km),
+            "first_pin_at": rows[0][7] if rows else None,
+            "last_pin_at": rows[-1][7] if rows else None,
+            "countries": sorted_countries,
+            "cities": sorted_cities,
+            "leaderboard": leaderboard,
+        }
+    finally:
+        conn.close()
+
+
+def record_payment_and_grant(telegram_charge_id, user_id, chat_id, product_type, target_id, amount_stars, currency="XTR", duration_days=None):
+    """Atomically record a completed Telegram Stars payment and grant the chat entitlement.
+
+    Idempotent on `telegram_charge_id` so Telegram webhook/polling retries never double-grant.
+    Returns True if newly recorded, False if this charge_id was already processed."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT 1 FROM payments WHERE telegram_charge_id = ?", (telegram_charge_id,))
+        if c.fetchone():
+            c.execute("COMMIT")
+            return False
+
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        c.execute(
+            "INSERT INTO payments (telegram_charge_id, user_id, chat_id, product_type, target_id, amount_stars, currency, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (telegram_charge_id, user_id, chat_id, product_type, target_id, amount_stars, currency, now),
+        )
+
+        expires_at = None
+        if product_type == "group_pass" and duration_days:
+            # Extend from an existing active pass if one exists, otherwise from now.
+            c.execute(
+                "SELECT MAX(expires_at) FROM chat_entitlements WHERE chat_id = ? AND entitlement_type = 'group_pass' AND expires_at > ?",
+                (chat_id, now),
+            )
+            existing_exp = c.fetchone()[0]
+            base_dt = datetime.fromisoformat(existing_exp) if existing_exp else now_dt
+            expires_at = (base_dt + timedelta(days=duration_days)).isoformat()
+
+        c.execute(
+            "INSERT INTO chat_entitlements (chat_id, entitlement_type, target_id, granted_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, product_type, target_id, user_id, now, expires_at),
+        )
+        c.execute("COMMIT")
+        return True
+    finally:
+        conn.close()
+
+
+def get_chat_entitlements(chat_id):
+    """Return active paid entitlements for a chat (Group Pass + HD-unlocked trip IDs)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        c.execute(
+            "SELECT MAX(expires_at) FROM chat_entitlements WHERE chat_id = ? AND entitlement_type = 'group_pass' AND (expires_at IS NULL OR expires_at > ?)",
+            (chat_id, now),
+        )
+        pass_exp = c.fetchone()[0]
+        c.execute(
+            "SELECT DISTINCT target_id FROM chat_entitlements WHERE chat_id = ? AND entitlement_type = 'trip_reel' AND target_id IS NOT NULL",
+            (chat_id,),
+        )
+        unlocked_trips = sorted(r[0] for r in c.fetchall())
+        return {
+            "has_group_pass": pass_exp is not None,
+            "group_pass_expires_at": pass_exp,
+            "unlocked_trip_ids": unlocked_trips,
+        }
+    finally:
+        conn.close()
+
+
+def is_trip_reel_unlocked(chat_id, trip_id):
+    """True if this trip's HD unwatermarked reel is unlocked (either directly or via active Group Pass)."""
+    ent = get_chat_entitlements(chat_id)
+    return ent["has_group_pass"] or (trip_id in ent["unlocked_trip_ids"])
+
+
+def get_trip_pins_for_reel(chat_id, trip_id, limit=20):
+    """Chronological pins (oldest -> newest) for rendering a Trip Recap Reel."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT p.id, p.user_id, p.user_name, p.video_file_id, p.city, p.country, p.country_code, p.created_at,"
+            " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, '')"
+            " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+            " WHERE p.chat_id = ? AND p.trip_id = ?"
+            " ORDER BY p.created_at ASC LIMIT ?",
+            (chat_id, trip_id, limit),
+        )
+        return [
+            {
+                "id": r[0],
+                "user_id": r[1],
+                "user_name": r[2],
+                "video_file_id": r[3],
+                "city": r[4],
+                "country": r[5],
+                "country_code": r[6],
+                "created_at": r[7],
+                "pin_color": r[8] or None,
+                "pin_emoji": r[9] or None,
+            }
+            for r in c.fetchall()
+        ]
     finally:
         conn.close()

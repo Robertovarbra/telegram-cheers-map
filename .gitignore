@@ -41,8 +41,9 @@ wheels/
 *.db
 videos.db
 
-# Proxy video byte cache (regenerated on demand from Telegram)
+# Proxy video byte cache & rendered reel cache (regenerated on demand from Telegram)
 video_cache/
+reel_cache/
 
 # IDE
 .idea/

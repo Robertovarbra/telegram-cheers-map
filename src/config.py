@@ -36,3 +36,26 @@ WEB_DIR = BASE_DIR / "web"
 # Bounded by an LRU eviction; size is env-tunable.
 VIDEO_CACHE_DIR = BASE_DIR / "video_cache"
 VIDEO_CACHE_MAX_BYTES = int(os.getenv("VIDEO_CACHE_MAX_MB", "512")) * 1024 * 1024
+
+
+def _parse_admin_ids() -> frozenset[int]:
+    raw = os.getenv("ADMIN_USER_IDS") or os.getenv("ADMIN_USER_ID") or ""
+    ids = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.add(int(part))
+    return frozenset(ids)
+
+
+# Telegram user IDs allowed to invoke /admin_stats in DM. Empty by default (fail closed).
+ADMIN_USER_IDS: frozenset[int] = _parse_admin_ids()
+
+# Trip Recap Reels + Telegram Stars pricing (amounts are whole Telegram Stars, currency="XTR").
+REEL_PRICE_STARS = max(1, int(os.getenv("REEL_PRICE_STARS", "100")))
+GROUP_PASS_STARS = max(1, int(os.getenv("GROUP_PASS_STARS", "250")))
+GROUP_PASS_DAYS = max(1, int(os.getenv("GROUP_PASS_DAYS", "30")))
+REEL_CACHE_DIR = BASE_DIR / "reel_cache"
+REEL_CACHE_MAX_BYTES = int(os.getenv("REEL_CACHE_MAX_MB", "512")) * 1024 * 1024
+REEL_MAX_CLIPS = max(1, int(os.getenv("REEL_MAX_CLIPS", "20")))
+REEL_CLIP_MAX_SEC = max(2, int(os.getenv("REEL_CLIP_MAX_SEC", "6")))

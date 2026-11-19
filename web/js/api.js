@@ -3,8 +3,15 @@ const INIT_DATA = (window.Telegram && window.Telegram.WebApp) ? (window.Telegram
 
 export function authHeaders() { return { 'Authorization': 'tma ' + INIT_DATA }; }
 
-// <video> tags can't send headers, so the video endpoint takes initData as a query param.
+// <video> tags can't send headers, so media endpoints take initData as a query param.
 export function videoUrl(fileId) { return '/api/video?file_id=' + encodeURIComponent(fileId) + '&auth=' + encodeURIComponent(INIT_DATA); }
+
+export function reelUrl(chatId, tripId, quality) {
+  return '/api/trip-reel?chat_id=' + encodeURIComponent(chatId)
+    + '&trip_id=' + encodeURIComponent(tripId)
+    + '&quality=' + encodeURIComponent(quality || 'preview')
+    + '&auth=' + encodeURIComponent(INIT_DATA);
+}
 
 export function apiPost(path, chatId, body) {
   return fetch(path + '?chat_id=' + encodeURIComponent(chatId), {
