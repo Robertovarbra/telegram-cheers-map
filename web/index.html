@@ -102,6 +102,14 @@ html, body {
 #trip-banner.hidden { display: none; }
 #trip-banner-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #trip-banner-count { font-size: 11px; font-weight: 600; color: var(--accent-text); background: var(--accent-soft); padding: 1px 6px; border-radius: 999px; flex-shrink: 0; }
+#trip-banner-reel {
+  border: none; border-radius: 999px; padding: 3px 9px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 3px;
+}
+#trip-banner-reel.hidden { display: none; }
+#trip-banner-reel:active { transform: scale(0.95); }
 #trip-banner-clear {
   border: none; background: transparent; color: var(--text-muted); cursor: pointer;
   width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
@@ -346,6 +354,71 @@ html, body {
 .lb-bar-fill { display: block; height: 100%; border-radius: 999px; }
 .lb-sub { font-size: 11px; color: var(--text-muted); }
 
+/* Trip Recap Reel modal + Telegram Stars unlock */
+#reel-overlay.hidden { display: none; }
+#reel-overlay {
+  position: fixed; inset: 0; z-index: 3200;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+  background: rgba(10, 12, 16, 0.78); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+#reel-card {
+  width: min(370px, 100%); max-height: 92vh;
+  background: var(--surface); color: var(--text);
+  border-radius: 22px; overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  display: flex; flex-direction: column;
+}
+#reel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 13px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.reel-head-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+#reel-title { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#reel-badge {
+  align-self: flex-start; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-muted);
+}
+#reel-badge.hd { background: rgba(46, 204, 113, 0.16); color: #2ecc71; }
+#reel-close {
+  width: 32px; height: 32px; border-radius: 50%; border: none;
+  background: var(--surface-2); color: var(--text-muted); font-size: 15px;
+  cursor: pointer; flex-shrink: 0;
+}
+#reel-stage {
+  position: relative; width: 100%; aspect-ratio: 9 / 16; max-height: 52vh;
+  background: #0d1015; display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+#reel-stage video { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0; transition: opacity 0.25s ease; }
+#reel-stage video.ready { opacity: 1; }
+#reel-loading {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px;
+  color: #cfd6e2; font-size: 13px; text-align: center; padding: 16px;
+}
+#reel-loading.hidden { display: none; }
+#reel-footer { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+#reel-status { font-size: 12px; color: var(--text-muted); text-align: center; line-height: 1.35; }
+#reel-status.hidden { display: none; }
+#reel-status.error { color: #ff453a; }
+.reel-actions { display: flex; flex-direction: column; gap: 8px; }
+.reel-actions.hidden { display: none; }
+.reel-btn {
+  width: 100%; border: none; border-radius: 12px; padding: 11px 14px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  transition: transform 0.08s ease, opacity 0.15s ease;
+}
+.reel-btn:active { transform: scale(0.98); }
+.reel-btn:disabled { opacity: 0.5; cursor: default; }
+.reel-btn.primary { background: var(--accent); color: #fff; }
+.reel-btn.gold { background: linear-gradient(135deg, #f59e0b, #f97316); color: #fff; box-shadow: 0 4px 14px rgba(245, 158, 11, 0.32); }
+.reel-btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-weight: 600; font-size: 13px; }
+.reel-sub-row { display: grid; grid-template-columns: 1fr 1.35fr; gap: 7px; }
+.reel-note { font-size: 11px; color: var(--text-muted); text-align: center; }
+
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--text-muted); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 4px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
@@ -357,6 +430,7 @@ html, body {
   <span aria-hidden="true">🍻</span>
   <span id="trip-banner-name"></span>
   <span id="trip-banner-count"></span>
+  <button id="trip-banner-reel" class="hidden" type="button" title="Watch & export Trip Recap Reel">🎬 Reel</button>
   <button id="trip-banner-clear" type="button" aria-label="Clear trip filter">✕</button>
 </div>
 
@@ -419,6 +493,34 @@ html, body {
   </div>
 </div>
 
+<div id="reel-overlay" class="hidden" role="dialog" aria-modal="true" aria-label="Trip Recap Reel">
+  <div id="reel-card">
+    <div id="reel-head">
+      <div class="reel-head-text">
+        <span id="reel-title">Trip Recap Reel</span>
+        <span id="reel-badge">Preview · Watermarked</span>
+      </div>
+      <button id="reel-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div id="reel-stage"></div>
+    <div id="reel-footer">
+      <div id="reel-status" class="hidden"></div>
+      <div id="reel-locked-actions" class="reel-actions">
+        <button id="reel-unlock-btn" class="reel-btn gold" type="button">⭐ Unlock HD · 100 Stars</button>
+        <div class="reel-sub-row">
+          <button id="reel-send-preview-btn" class="reel-btn secondary" type="button">Send Preview</button>
+          <button id="reel-pass-btn" class="reel-btn secondary" type="button">✨ Group Pass</button>
+        </div>
+        <div class="reel-note">Unlocks 720p unwatermarked export for everyone in this group.</div>
+      </div>
+      <div id="reel-unlocked-actions" class="reel-actions hidden">
+        <button id="reel-send-hd-btn" class="reel-btn primary" type="button">📤 Send HD Reel to Group</button>
+        <div class="reel-note">720p · No watermark · Ready to save or share to Stories.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="detail" class="hidden">
   <div id="detail-backdrop"></div>
   <button id="detail-delete" class="hidden" type="button" title="Delete this cheers" aria-label="Delete this cheers">
@@ -474,6 +576,7 @@ html, body {
     "/js/filters.js": "/js/filters.js?v=__ASSET_V__",
     "/js/location-share.js": "/js/location-share.js?v=__ASSET_V__",
     "/js/markers.js": "/js/markers.js?v=__ASSET_V__",
+    "/js/reel.js": "/js/reel.js?v=__ASSET_V__",
     "/js/state.js": "/js/state.js?v=__ASSET_V__",
     "/js/stats.js": "/js/stats.js?v=__ASSET_V__",
     "/js/util.js": "/js/util.js?v=__ASSET_V__",

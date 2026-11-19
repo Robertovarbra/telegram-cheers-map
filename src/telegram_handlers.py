@@ -6,7 +6,7 @@ from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
 from auth import is_member
-from config import ADMIN_USER_IDS, BOT_USERNAME, logger
+from config import ADMIN_USER_IDS, BOT_USERNAME, GROUP_PASS_DAYS, GROUP_PASS_STARS, REEL_PRICE_STARS, logger
 from database import (
     add_pin,
     close_trip,
@@ -14,6 +14,7 @@ from database import (
     delete_chat_pins,
     get_all_chat_ids,
     get_analytics_summary,
+    get_chat_entitlements,
     get_chat_setting,
     get_chat_trip_users,
     get_open_trip_for_member,
@@ -22,7 +23,10 @@ from database import (
     get_pins_meta,
     get_trip,
     get_trip_members,
+    get_trip_pins_for_reel,
+    is_trip_reel_unlocked,
     pop_pending_pin,
+    record_payment_and_grant,
     set_chat_setting,
     set_pending_pin,
     set_trip_checklist_msg,
@@ -114,6 +118,8 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     map_cmd = ev.get("map_command", 0)
     map_open = ev.get("map_opened", 0)
     stats_open = ev.get("stats_opened", 0)
+    reel_prev = ev.get("reel_preview_generated", 0)
+    reel_hd = ev.get("reel_hd_generated", 0)
     conv = f"{(created / started * 100):.0f}%" if started else "n/a"
 
     lines = [
@@ -122,6 +128,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "All-time:",
         f"• Pins: {s['total_pins']} across {s['total_chats']} chats ({s['total_users']} users)",
         f"• Trips: {s['total_trips']} total ({s['open_trips']} open)",
+        f"• Revenue: ⭐ {s['stars_total']} Stars ({s['payments_total']} payments)",
         "",
         f"Last {days}d activity:",
         f"• Active: {s['active_chats']} chats, {s['active_users']} users",
@@ -129,6 +136,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• Pin funnel: {started} started → {created} created ({conv})",
         f"• Pins deleted: {deleted}",
         f"• Map: {map_cmd} /map cmds → {map_open} map opens · {stats_open} passport opens",
+        f"• Reels: {reel_prev} preview · {reel_hd} HD · ⭐ {s['stars_window']} Stars ({s['payments_window']} paid)",
     ]
     if s["top_chats"]:
         lines.append("")
@@ -359,8 +367,8 @@ async def _start_trip(context, chat_id, user, name) -> None:
 
 
 async def _end_trip(bot, chat_id, trip) -> None:
-    """Close a trip (if still open) and retire its checklist message so the toggle buttons stop
-    implying it's live. `trip` must carry checklist_msg_id (get_trip / get_open_trips both do)."""
+    """Close a trip (if still open), retire its checklist message, and post a recap summary card
+    linking straight to the trip's map & Reel player when the trip has at least one cheers."""
     if trip.get("closed_at") is None:
         close_trip(trip["id"])
     if trip.get("checklist_msg_id"):
@@ -368,6 +376,25 @@ async def _end_trip(bot, chat_id, trip) -> None:
             await bot.edit_message_text(chat_id=chat_id, message_id=trip["checklist_msg_id"], text=f"🔚 Trip '{trip['name']}' ended.")
         except Exception as e:
             logger.warning("Could not retire checklist for trip %s: %s", trip["id"], e)
+
+    pins = get_trip_pins_for_reel(chat_id, trip["id"], limit=500)
+    if pins and BOT_USERNAME:
+        cities = {p["city"] for p in pins if p.get("city")}
+        friends = {p["user_id"] for p in pins}
+        parts = [f"{len(pins)} cheers"]
+        if cities:
+            parts.append(f"{len(cities)} {'city' if len(cities) == 1 else 'cities'}")
+        parts.append(f"{len(friends)} {'friend' if len(friends) == 1 else 'friends'}")
+        trip_url = f"https://t.me/{BOT_USERNAME}/map?startapp=c{chat_id}_t{trip['id']}"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Watch Trip Recap Reel", url=trip_url)]])
+        try:
+            await bot.send_message(
+                chat_id,
+                f"🎬 Trip '{trip['name']}' wrapped!\n" + " · ".join(parts) + "\n\nOpen the map to watch the route & export your Trip Recap Reel.",
+                reply_markup=kb,
+            )
+        except Exception as e:
+            logger.warning("Could not send trip summary for trip %s: %s", trip["id"], e)
 
 
 def _open_trips_summary(chat_id):
@@ -801,3 +828,104 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
             )
         except Exception as e:
             logger.info("Could not send welcome message to chat %s: %s", cm.chat.id, e)
+
+
+def _parse_stars_payload(payload: str):
+    """Parse our Stars invoice payload (`reel:<chat_id>:<trip_id>` or `pass:<chat_id>`)."""
+    parts = (payload or "").split(":")
+    if len(parts) == 3 and parts[0] == "reel" and parts[1].lstrip("-").isdigit() and parts[2].isdigit():
+        return "trip_reel", int(parts[1]), int(parts[2])
+    if len(parts) == 2 and parts[0] == "pass" and parts[1].lstrip("-").isdigit():
+        return "group_pass", int(parts[1]), None
+    return None
+
+
+async def handle_pre_checkout_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Validate Telegram Stars checkout before Telegram charges the user (must answer within 10s)."""
+    query = update.pre_checkout_query
+    if not query:
+        return
+    if query.currency != "XTR":
+        await query.answer(ok=False, error_message="Unsupported currency.")
+        return
+
+    parsed = _parse_stars_payload(query.invoice_payload)
+    if not parsed:
+        await query.answer(ok=False, error_message="Invalid payment request.")
+        return
+    product_type, chat_id, target_id = parsed
+
+    user = query.from_user
+    if not user or not await is_member(context.bot, chat_id, user.id):
+        await query.answer(ok=False, error_message="You must be a member of this group to unlock its reels.")
+        return
+
+    if product_type == "trip_reel":
+        if query.total_amount != REEL_PRICE_STARS:
+            await query.answer(ok=False, error_message="Price changed — please reopen checkout.")
+            return
+        trip = get_trip(target_id)
+        if not trip or trip["chat_id"] != chat_id:
+            await query.answer(ok=False, error_message="This trip no longer exists.")
+            return
+        if is_trip_reel_unlocked(chat_id, target_id):
+            await query.answer(ok=False, error_message="This trip's HD reel is already unlocked for your group!")
+            return
+    else:
+        if query.total_amount != GROUP_PASS_STARS:
+            await query.answer(ok=False, error_message="Price changed — please reopen checkout.")
+            return
+        if get_chat_entitlements(chat_id)["has_group_pass"]:
+            await query.answer(ok=False, error_message="Your group already has an active Group Pass!")
+            return
+
+    await query.answer(ok=True)
+
+
+async def handle_successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Record a completed Telegram Stars payment and grant the group entitlement atomically."""
+    msg = update.message
+    sp = msg.successful_payment if msg else None
+    if not sp:
+        return
+
+    parsed = _parse_stars_payload(sp.invoice_payload)
+    if not parsed:
+        logger.warning("Unknown successful_payment payload: %s", sp.invoice_payload)
+        return
+    product_type, chat_id, target_id = parsed
+    user = msg.from_user
+    user_id = user.id if user else 0
+
+    duration = GROUP_PASS_DAYS if product_type == "group_pass" else None
+    newly_recorded = record_payment_and_grant(
+        telegram_charge_id=sp.telegram_payment_charge_id,
+        user_id=user_id,
+        chat_id=chat_id,
+        product_type=product_type,
+        target_id=target_id,
+        amount_stars=sp.total_amount,
+        currency=sp.currency,
+        duration_days=duration,
+    )
+    if newly_recorded:
+        track("payment_succeeded", chat_id=chat_id, user_id=user_id)
+        logger.info("Stars payment succeeded: %s chat=%s target=%s stars=%s by user=%s", product_type, chat_id, target_id, sp.total_amount, user_id)
+
+    reply_markup = None
+    if BOT_USERNAME:
+        sp_param = f"c{chat_id}_t{target_id}" if product_type == "trip_reel" else f"c{chat_id}"
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Open Trip Reel", url=f"https://t.me/{BOT_USERNAME}/map?startapp={sp_param}")]])
+
+    if product_type == "trip_reel":
+        trip = get_trip(target_id)
+        tname = trip["name"] if trip else "your trip"
+        await msg.reply_text(
+            f"✨ HD Trip Reel unlocked for '{tname}'! Everyone in the group can now watch and export it without a watermark.",
+            reply_markup=reply_markup,
+        )
+    else:
+        await msg.reply_text(
+            f"✨ Group Pass active for {GROUP_PASS_DAYS} days! Everyone in your group now has unlimited HD unwatermarked Trip Recap Reels.",
+            reply_markup=reply_markup,
+        )

@@ -35,7 +35,7 @@ export function updatePagination() {
   document.getElementById('page-next').disabled = state.currentPage >= totalPages;
 }
 
-function getServerFilterParams() {
+export function getServerFilterParams() {
   var totalCbs = document.querySelectorAll('.filter-user-cb').length;
   var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
   var params = {};
@@ -105,6 +105,8 @@ function updateFilterIndicators() {
   }
   document.getElementById('trip-banner-name').textContent = t.name;
   document.getElementById('trip-banner-count').textContent = String(t.pin_count);
+  var reelBtn = document.getElementById('trip-banner-reel');
+  if (reelBtn) reelBtn.classList.toggle('hidden', t.pin_count <= 0);
   banner.classList.remove('hidden');
 }
 
@@ -207,7 +209,12 @@ export function populateFilters(meta) {
   } else if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) {
     state.currentUserId = window.Telegram.WebApp.initDataUnsafe.user.id;
   }
+  if (meta.entitlements) state.entitlements = meta.entitlements;
+  if (meta.pricing) state.pricing = meta.pricing;
   state.trips = meta.trips || [];
+  if (state.initialTripId != null && state.trips.some(function (t) { return t.id === state.initialTripId; })) {
+    state.selectedTripId = state.initialTripId;
+  }
   renderTripChips();
   document.getElementById('trip-filters').addEventListener('click', function(e) {
     var chip = e.target.closest('.trip-chip');

@@ -15,7 +15,7 @@ Bot de Telegram que permite a usuarios de un grupo enviar video notes y ubicacio
 
 ```bash
 # Instalar dependencias del sistema
-sudo apt update && sudo apt install -y python3 python3-venv git rclone
+sudo apt update && sudo apt install -y python3 python3-venv git rclone ffmpeg
 
 # Instalar uv (gestor de paquetes)
 curl -LsSf https://astral.sh/uv/install.sh | sh

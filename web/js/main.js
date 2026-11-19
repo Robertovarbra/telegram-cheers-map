@@ -1,13 +1,14 @@
 // Entry point: parses the start params, branches to location-share mode, then boots the map.
 import { state } from './state.js';
-import { extractChatIdFromStartParam } from './util.js';
+import { extractChatIdFromStartParam, extractTripIdFromStartParam } from './util.js';
 import { authHeaders } from './api.js';
 import { startLocationShare } from './location-share.js';
-import { populateFilters, loadPins, initFilters } from './filters.js';
+import { populateFilters, loadPins, initFilters, getServerFilterParams } from './filters.js';
 import { renderMarkers, renderTripRoute } from './markers.js';
 import { updateVideoPlayback } from './video.js';
 import { initDetail } from './detail.js';
 import { initStats } from './stats.js';
+import { initReel } from './reel.js';
 
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
@@ -76,6 +77,8 @@ if (locShare) {
 }
 
 state.chatId = chatId;
+var tripIdParam = params.get('trip_id');
+state.initialTripId = (tripIdParam && /^\d+$/.test(tripIdParam)) ? parseInt(tripIdParam, 10) : extractTripIdFromStartParam(startParam);
 
 const map = L.map('map').setView([0, 0], 2);
 state.map = map;
@@ -106,6 +109,7 @@ map.on('zoomend', function () { state.skipBoundsFit = true; renderMarkers(); });
 initFilters();
 initDetail();
 initStats();
+initReel();
 
 document.body.addEventListener('click', function (e) {
   var btn = e.target.closest('#view-all');
@@ -123,7 +127,7 @@ fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId), { headers: authHea
   })
   .then(function(meta) {
     populateFilters(meta);
-    loadPins(1);
+    loadPins(1, getServerFilterParams());
   })
   .catch(function(e) {
     console.error('Meta error:', e);

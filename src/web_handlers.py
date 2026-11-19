@@ -6,21 +6,35 @@ from pathlib import Path
 
 from aiohttp import ClientSession as AiohttpClient
 from aiohttp import ClientTimeout, web
+from telegram import LabeledPrice
 
 from auth import extract_init_data, is_member, verify_init_data
-from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES, logger
+from config import (
+    GROUP_PASS_DAYS,
+    GROUP_PASS_STARS,
+    REEL_MAX_CLIPS,
+    REEL_PRICE_STARS,
+    VIDEO_CACHE_DIR,
+    VIDEO_CACHE_MAX_BYTES,
+    logger,
+)
 from database import (
     add_pin,
     delete_pin,
+    get_chat_entitlements,
     get_chat_ids_for_file,
     get_chat_stats,
     get_open_trip_for_member,
     get_pins,
     get_pins_meta,
+    get_trip,
+    get_trip_pins_for_reel,
+    is_trip_reel_unlocked,
     pop_pending_pin,
     set_pins_trip,
     track,
 )
+from reel_generator import get_or_render_trip_reel
 from telegram_handlers import reverse_geocode
 
 # Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
@@ -205,6 +219,41 @@ async def _stream_and_cache(request: web.Request, bot, file_id: str) -> web.Stre
                 tmp.unlink(missing_ok=True)
 
 
+async def ensure_video_cached(bot, file_id: str) -> Path:
+    """Ensure a clip is present in VIDEO_CACHE_DIR (downloading from Telegram CDN only on a miss).
+    Shared by the Trip Recap Reel generator so cached map clips aren't re-fetched."""
+    cached = _cache_lookup(file_id)
+    if cached is not None:
+        return cached
+
+    name = _cache_name(file_id)
+    path = VIDEO_CACHE_DIR / name
+    lock = _cache_locks.setdefault(file_id, asyncio.Lock())
+    _prune_locks(file_id)
+    async with lock:
+        cached = _cache_lookup(file_id)
+        if cached is not None:
+            return cached
+        file_path = await _resolve_file_path(bot, file_id)
+        tmp = path.with_name(name + ".tmp")
+        renamed = False
+        try:
+            async with AiohttpClient() as session:
+                async with session.get(file_path, timeout=ClientTimeout(sock_read=30)) as up:
+                    if up.status != 200:
+                        raise FileNotFoundError(f"upstream returned {up.status}")
+                    with open(tmp, "wb") as f:
+                        async for chunk in up.content.iter_chunked(65536):
+                            f.write(chunk)
+            tmp.replace(path)
+            renamed = True
+            _record(name, path.stat().st_size)
+            return path
+        finally:
+            if not renamed:
+                tmp.unlink(missing_ok=True)
+
+
 async def _authorize(request: web.Request, chat_id: int):
     """Verify the caller's Mini App initData and chat membership.
 
@@ -328,6 +377,12 @@ async def handle_pins_meta(request: web.Request) -> web.Response:
     try:
         result = get_pins_meta(int(chat_id))
         result["current_user_id"] = int(data["user"]["id"])
+        result["entitlements"] = get_chat_entitlements(int(chat_id))
+        result["pricing"] = {
+            "reel_stars": REEL_PRICE_STARS,
+            "group_pass_stars": GROUP_PASS_STARS,
+            "group_pass_days": GROUP_PASS_DAYS,
+        }
         return web.json_response(result)
     except Exception:
         logger.warning("handle_pins_meta failed for chat %s", chat_id, exc_info=True)
@@ -495,3 +550,206 @@ async def handle_stats(request: web.Request) -> web.Response:
     except Exception:
         logger.warning("handle_stats failed for chat %s", chat_id, exc_info=True)
         return web.json_response({"error": "internal error"}, status=400)
+
+
+async def handle_entitlements(request: web.Request) -> web.Response:
+    """Return current paid entitlements + pricing for an authorized chat (used after Stars checkout)."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    _, err = await _authorize(request, chat_id)
+    if err:
+        return err
+
+    return web.json_response(
+        {
+            "entitlements": get_chat_entitlements(chat_id),
+            "pricing": {
+                "reel_stars": REEL_PRICE_STARS,
+                "group_pass_stars": GROUP_PASS_STARS,
+                "group_pass_days": GROUP_PASS_DAYS,
+            },
+        }
+    )
+
+
+async def handle_reel_invoice(request: web.Request) -> web.Response:
+    """Create a Telegram Stars (XTR) invoice link to unlock an HD Trip Reel or a 30-day Group Pass."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+    user_id = int(data["user"]["id"])
+
+    try:
+        body = await request.json()
+        product = body.get("product")
+        if product not in ("trip_reel", "group_pass"):
+            raise ValueError("invalid product")
+        trip_id = None
+        if product == "trip_reel":
+            raw_tid = body["trip_id"]
+            if isinstance(raw_tid, bool):
+                raise TypeError
+            trip_id = int(raw_tid)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    bot = request.app.get("bot")
+    if not bot:
+        return web.json_response({"error": "bot not ready"}, status=503)
+
+    if product == "trip_reel":
+        trip = get_trip(trip_id)
+        if not trip or trip["chat_id"] != chat_id:
+            return web.json_response({"error": "trip not found"}, status=404)
+        if is_trip_reel_unlocked(chat_id, trip_id):
+            return web.json_response({"already_unlocked": True, "entitlements": get_chat_entitlements(chat_id)})
+        title = f"HD Trip Reel — {trip['name'][:22]}"
+        description = f"Unlock the 720p unwatermarked recap reel for '{trip['name']}' for everyone in this group."
+        payload = f"reel:{chat_id}:{trip_id}"
+        stars = REEL_PRICE_STARS
+    else:
+        ent = get_chat_entitlements(chat_id)
+        if ent["has_group_pass"]:
+            return web.json_response({"already_unlocked": True, "entitlements": ent})
+        title = f"Cheers Group Pass ({GROUP_PASS_DAYS}d)"
+        description = f"Unlimited HD unwatermarked Trip Recap Reels for every trip in this group for {GROUP_PASS_DAYS} days."
+        payload = f"pass:{chat_id}"
+        stars = GROUP_PASS_STARS
+
+    try:
+        invoice_url = await bot.create_invoice_link(
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=title, amount=stars)],
+        )
+    except Exception:
+        logger.warning("create_invoice_link failed for chat %s product %s", chat_id, product, exc_info=True)
+        return web.json_response({"error": "could not create invoice"}, status=502)
+
+    track("invoice_created", chat_id=chat_id, user_id=user_id)
+    return web.json_response({"invoice_url": invoice_url, "stars": stars})
+
+
+async def _prepare_trip_reel(request: web.Request, chat_id: int, trip_id: int, quality: str):
+    """Validate trip ownership, enforce the HD paywall (fail closed -> 402), and render/fetch the reel."""
+    trip = get_trip(trip_id)
+    if not trip or trip["chat_id"] != chat_id:
+        return None, None, web.json_response({"error": "trip not found"}, status=404)
+
+    hd = quality == "hd"
+    if hd and not is_trip_reel_unlocked(chat_id, trip_id):
+        return None, None, web.json_response({"error": "payment_required", "stars": REEL_PRICE_STARS}, status=402)
+
+    pins = get_trip_pins_for_reel(chat_id, trip_id, limit=REEL_MAX_CLIPS)
+    if not pins:
+        return None, None, web.json_response({"error": "trip has no cheers yet"}, status=404)
+
+    bot = request.app.get("bot")
+    if not bot:
+        return None, None, web.json_response({"error": "bot not ready"}, status=503)
+
+    async def _fetch(file_id: str) -> Path:
+        return await ensure_video_cached(bot, file_id)
+
+    try:
+        reel_path = await get_or_render_trip_reel(chat_id, trip_id, trip["name"], pins, hd=hd, fetch_video_fn=_fetch)
+    except Exception:
+        logger.warning("Trip reel render failed for chat %s trip %s hd=%s", chat_id, trip_id, hd, exc_info=True)
+        return None, None, web.json_response({"error": "could not render reel"}, status=500)
+
+    return trip, reel_path, None
+
+
+async def handle_trip_reel(request: web.Request) -> web.StreamResponse:
+    """Stream (with Range support) a vertical 9:16 Trip Recap Reel (free preview or Stars-unlocked HD)."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    trip_id_raw = request.rel_url.query.get("trip_id")
+    if not chat_id_raw or not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    if not trip_id_raw or not trip_id_raw.isdigit():
+        return web.json_response({"error": "invalid trip_id"}, status=400)
+
+    chat_id = int(chat_id_raw)
+    trip_id = int(trip_id_raw)
+    quality = request.rel_url.query.get("quality", "preview")
+    if quality not in ("preview", "hd"):
+        return web.json_response({"error": "invalid quality"}, status=400)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+
+    _, reel_path, prep_err = await _prepare_trip_reel(request, chat_id, trip_id, quality)
+    if prep_err:
+        return prep_err
+
+    track("reel_hd_generated" if quality == "hd" else "reel_preview_generated", chat_id=chat_id, user_id=int(data["user"]["id"]))
+    resp = web.FileResponse(reel_path)
+    resp.headers["Content-Disposition"] = f'inline; filename="cheers-trip-{trip_id}-{quality}.mp4"'
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    return resp
+
+
+async def handle_send_trip_reel(request: web.Request) -> web.Response:
+    """Post the Trip Recap Reel directly into the Telegram group so members can save or share it."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw or not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+    user_id = int(data["user"]["id"])
+
+    try:
+        body = await request.json()
+        raw_tid = body["trip_id"]
+        if isinstance(raw_tid, bool):
+            raise TypeError
+        trip_id = int(raw_tid)
+        quality = body.get("quality", "preview")
+        if quality not in ("preview", "hd"):
+            raise ValueError("invalid quality")
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    trip, reel_path, prep_err = await _prepare_trip_reel(request, chat_id, trip_id, quality)
+    if prep_err:
+        return prep_err
+
+    bot = request.app["bot"]
+    hd = quality == "hd"
+    w, h = (720, 1280) if hd else (480, 854)
+    caption = f"🎬 {trip['name']} — HD Cheers Recap" if hd else f"🎬 {trip['name']} — Cheers Recap (preview)"
+    try:
+        with open(reel_path, "rb") as vf:
+            await bot.send_video(
+                chat_id=chat_id,
+                video=vf,
+                caption=caption,
+                width=w,
+                height=h,
+                supports_streaming=True,
+            )
+    except Exception:
+        logger.warning("Could not send trip reel to chat %s", chat_id, exc_info=True)
+        return web.json_response({"error": "could not send reel to chat"}, status=502)
+
+    track("reel_sent_to_chat", chat_id=chat_id, user_id=user_id)
+    return web.json_response({"ok": True})

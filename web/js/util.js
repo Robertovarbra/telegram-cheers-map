@@ -38,6 +38,12 @@ export function extractChatIdFromStartParam(sp) {
   return sep > 0 ? rest.slice(0, sep) : rest;
 }
 
+export function extractTripIdFromStartParam(sp) {
+  if (!sp) return null;
+  var m = sp.match(/_t(\d+)$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
 // Convert a 2-letter ISO-3166 alpha-2 country code (e.g. "pt") to its regional indicator flag emoji.
 export function countryFlag(cc) {
   if (!cc || typeof cc !== 'string' || !/^[a-zA-Z]{2}$/.test(cc)) return '';

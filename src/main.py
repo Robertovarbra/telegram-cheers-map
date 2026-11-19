@@ -11,6 +11,7 @@ from telegram.ext import (
     ChatMemberHandler,
     CommandHandler,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 
@@ -24,7 +25,9 @@ from telegram_handlers import (
     handle_emoji_text,
     handle_location,
     handle_my_chat_member,
+    handle_pre_checkout_query,
     handle_pref_callback,
+    handle_successful_payment,
     handle_video,
     map_command,
     start,
@@ -34,12 +37,16 @@ from web_handlers import (
     handle_bot_info,
     handle_chat,
     handle_delete_pin,
+    handle_entitlements,
     handle_health,
     handle_pin_trip,
     handle_pins,
     handle_pins_meta,
+    handle_reel_invoice,
+    handle_send_trip_reel,
     handle_stats,
     handle_submit_location,
+    handle_trip_reel,
     handle_video_proxy,
 )
 
@@ -93,6 +100,10 @@ async def main() -> None:
     web_app.router.add_get("/api/pins", handle_pins)
     web_app.router.add_get("/api/pins-meta", handle_pins_meta)
     web_app.router.add_get("/api/stats", handle_stats)
+    web_app.router.add_get("/api/entitlements", handle_entitlements)
+    web_app.router.add_get("/api/trip-reel", handle_trip_reel)
+    web_app.router.add_post("/api/send-trip-reel", handle_send_trip_reel)
+    web_app.router.add_post("/api/reel-invoice", handle_reel_invoice)
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_post("/api/submit-location", handle_submit_location)
@@ -134,6 +145,8 @@ async def main() -> None:
     application.add_handler(CommandHandler("emoji", emoji_command))
     application.add_handler(CommandHandler("trip", trip_command))
     application.add_handler(CallbackQueryHandler(handle_pref_callback))
+    application.add_handler(PreCheckoutQueryHandler(handle_pre_checkout_query))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, handle_successful_payment))
     application.add_handler(MessageHandler(filters.TEXT, handle_emoji_text))
     application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))

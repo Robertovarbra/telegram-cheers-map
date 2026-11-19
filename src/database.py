@@ -152,6 +152,31 @@ def migrate_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_analytics_event_created ON analytics_events(event, created_at)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events(created_at)")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_charge_id TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                product_type TEXT NOT NULL,
+                target_id INTEGER,
+                amount_stars INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS chat_entitlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                entitlement_type TEXT NOT NULL,
+                target_id INTEGER,
+                granted_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_entitlements_chat ON chat_entitlements(chat_id, entitlement_type, target_id)")
         conn.commit()
     finally:
         conn.close()
@@ -635,6 +660,7 @@ def delete_chat_pins(chat_id):
             c.execute("DELETE FROM trip_members WHERE trip_id IN (SELECT id FROM trips WHERE chat_id = ?)", (chat_id,))
             c.execute("DELETE FROM trips WHERE chat_id = ?", (chat_id,))
             c.execute("DELETE FROM chat_trip_users WHERE chat_id = ?", (chat_id,))
+            c.execute("DELETE FROM chat_entitlements WHERE chat_id = ?", (chat_id,))
             conn.commit()
         except Exception:
             pass
@@ -743,6 +769,12 @@ def get_analytics_summary(days=7):
         )
         top_chats = [{"chat_id": r[0], "pins": r[1]} for r in c.fetchall()]
 
+        c.execute("SELECT COUNT(*), COALESCE(SUM(amount_stars), 0) FROM payments WHERE created_at >= ?", (since,))
+        payments_window, stars_window = c.fetchone()
+
+        c.execute("SELECT COUNT(*), COALESCE(SUM(amount_stars), 0) FROM payments")
+        payments_total, stars_total = c.fetchone()
+
         return {
             "days": days,
             "total_pins": total_pins,
@@ -755,6 +787,10 @@ def get_analytics_summary(days=7):
             "pins_in_window": pins_in_window,
             "events": events,
             "top_chats": top_chats,
+            "payments_window": payments_window,
+            "stars_window": stars_window,
+            "payments_total": payments_total,
+            "stars_total": stars_total,
         }
     finally:
         conn.close()
@@ -862,5 +898,112 @@ def get_chat_stats(chat_id):
             "cities": sorted_cities,
             "leaderboard": leaderboard,
         }
+    finally:
+        conn.close()
+
+
+def record_payment_and_grant(telegram_charge_id, user_id, chat_id, product_type, target_id, amount_stars, currency="XTR", duration_days=None):
+    """Atomically record a completed Telegram Stars payment and grant the chat entitlement.
+
+    Idempotent on `telegram_charge_id` so Telegram webhook/polling retries never double-grant.
+    Returns True if newly recorded, False if this charge_id was already processed."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT 1 FROM payments WHERE telegram_charge_id = ?", (telegram_charge_id,))
+        if c.fetchone():
+            c.execute("COMMIT")
+            return False
+
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        c.execute(
+            "INSERT INTO payments (telegram_charge_id, user_id, chat_id, product_type, target_id, amount_stars, currency, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (telegram_charge_id, user_id, chat_id, product_type, target_id, amount_stars, currency, now),
+        )
+
+        expires_at = None
+        if product_type == "group_pass" and duration_days:
+            # Extend from an existing active pass if one exists, otherwise from now.
+            c.execute(
+                "SELECT MAX(expires_at) FROM chat_entitlements WHERE chat_id = ? AND entitlement_type = 'group_pass' AND expires_at > ?",
+                (chat_id, now),
+            )
+            existing_exp = c.fetchone()[0]
+            base_dt = datetime.fromisoformat(existing_exp) if existing_exp else now_dt
+            expires_at = (base_dt + timedelta(days=duration_days)).isoformat()
+
+        c.execute(
+            "INSERT INTO chat_entitlements (chat_id, entitlement_type, target_id, granted_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (chat_id, product_type, target_id, user_id, now, expires_at),
+        )
+        c.execute("COMMIT")
+        return True
+    finally:
+        conn.close()
+
+
+def get_chat_entitlements(chat_id):
+    """Return active paid entitlements for a chat (Group Pass + HD-unlocked trip IDs)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        c.execute(
+            "SELECT MAX(expires_at) FROM chat_entitlements WHERE chat_id = ? AND entitlement_type = 'group_pass' AND (expires_at IS NULL OR expires_at > ?)",
+            (chat_id, now),
+        )
+        pass_exp = c.fetchone()[0]
+        c.execute(
+            "SELECT DISTINCT target_id FROM chat_entitlements WHERE chat_id = ? AND entitlement_type = 'trip_reel' AND target_id IS NOT NULL",
+            (chat_id,),
+        )
+        unlocked_trips = sorted(r[0] for r in c.fetchall())
+        return {
+            "has_group_pass": pass_exp is not None,
+            "group_pass_expires_at": pass_exp,
+            "unlocked_trip_ids": unlocked_trips,
+        }
+    finally:
+        conn.close()
+
+
+def is_trip_reel_unlocked(chat_id, trip_id):
+    """True if this trip's HD unwatermarked reel is unlocked (either directly or via active Group Pass)."""
+    ent = get_chat_entitlements(chat_id)
+    return ent["has_group_pass"] or (trip_id in ent["unlocked_trip_ids"])
+
+
+def get_trip_pins_for_reel(chat_id, trip_id, limit=20):
+    """Chronological pins (oldest -> newest) for rendering a Trip Recap Reel."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT p.id, p.user_id, p.user_name, p.video_file_id, p.city, p.country, p.country_code, p.created_at,"
+            " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, '')"
+            " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+            " WHERE p.chat_id = ? AND p.trip_id = ?"
+            " ORDER BY p.created_at ASC LIMIT ?",
+            (chat_id, trip_id, limit),
+        )
+        return [
+            {
+                "id": r[0],
+                "user_id": r[1],
+                "user_name": r[2],
+                "video_file_id": r[3],
+                "city": r[4],
+                "country": r[5],
+                "country_code": r[6],
+                "created_at": r[7],
+                "pin_color": r[8] or None,
+                "pin_emoji": r[9] or None,
+            }
+            for r in c.fetchall()
+        ]
     finally:
         conn.close()

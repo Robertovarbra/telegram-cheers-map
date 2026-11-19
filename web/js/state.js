@@ -18,4 +18,7 @@ export const state = {
   detailPins: null,   // pins shown in the open detail overlay (null when closed)
   trips: [],          // {id, name, created_at, closed_at, pin_count} from /api/pins-meta, newest first
   selectedTripId: null,  // trip chip currently selected in the filter panel (null = all)
+  initialTripId: null,   // optional deep-link trip id from startapp=c<chat>_t<trip>
+  entitlements: { has_group_pass: false, group_pass_expires_at: null, unlocked_trip_ids: [] },
+  pricing: { reel_stars: 100, group_pass_stars: 250, group_pass_days: 30 },
 };
