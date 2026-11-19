@@ -19,6 +19,32 @@ There are **no tests** in this repo.
 
 Ruff is configured in `pyproject.toml`. Two choices to be aware of: `web/` is excluded from linting, and the line length is a wide **160** (so don't hand-wrap long lines to 88). Run `ruff check`/`ruff format` and match the existing style.
 
+## Testing live in Telegram (dev bot + Cloudflare Tunnel)
+
+When the user wants to test a branch live in their own Telegram app before merging to `main`, this machine has a dedicated dev bot (configured in the local, gitignored `.env` — e.g. `BOT_USERNAME=cheers_map_dev_bot`, `WEB_PORT=8080`, `WEB_URL=https://devcheersmap.robertoapproved.com`) and a named Cloudflare Tunnel (`~/.cloudflared/config-dev.yml`) that routes the dev Mini App domain straight to `http://localhost:8080`.
+
+Start both processes (e.g. as background daemons) from the repo root:
+
+```bash
+# 1. Start the local dev bot + aiohttp web server on 127.0.0.1:8080 (reads .env)
+uv run python src/main.py
+
+# 2. Expose localhost:8080 to Telegram via the dev Cloudflare Tunnel
+cloudflared tunnel --config ~/.cloudflared/config-dev.yml run
+```
+
+Verify both local and tunneled endpoints before handing off to the user:
+
+```bash
+curl -sf http://127.0.0.1:8080/api/health
+curl -sf https://devcheersmap.robertoapproved.com/api/health
+```
+
+**Notes:**
+- Changes to `web/js/*.js` or `web/index.html` require restarting `src/main.py` because `index.html` (and its `__ASSET_V__` cache-busting hash) is rendered once at startup.
+- Never print or commit `.env` (contains `BOT_TOKEN`) or `~/.cloudflared/*.json` credentials.
+- Stop the dev processes cleanly when finished testing (or kill by port `lsof -nP -iTCP:8080 -sTCP:LISTEN -t | xargs kill` + `pkill -f "config-dev.yml"`).
+
 ## Verifying your own frontend changes (no Telegram account needed)
 
 There's no test suite, and you **cannot** exercise the Mini App through real Telegram from here — there's no Telegram account, and the `/api/*` endpoints reject any request without a valid `initData` HMAC, which you can't forge without `BOT_TOKEN`. So to actually *see* a `web/` change run (looping markers, viewport gating, zoom clustering, the detail overlay, colors), drive a real Chrome against a throwaway local server that serves the real frontend with **fake `/api/*` data and auth disabled**. This is the harness used to verify the video-marker work; rebuild it the same way for any future `web/` change.
