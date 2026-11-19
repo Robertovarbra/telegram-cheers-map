@@ -46,13 +46,15 @@ Keep core pinning, mapping, and basic trips **free forever** so groups adopt it 
 
 ---
 
-### Step 4 — Retention & Personal Atlas *(Next)*
-- [ ] **Personal "My Atlas" view:** Open the bot in DM to see all your own pins across every group + allow solo pinning in DM (turns a single-group bot into *your* personal life map)
-- [ ] **Pin reactions & lightweight captions:** Quick emoji reactions (🍻🔥😂) inside the detail sheet + optional short caption / drink-or-mood tag
-- [ ] **Pin location editing:** Fix indoor GPS drift directly from the detail sheet (owner-only)
-- [ ] **"On this day" nostalgic throwbacks:** Periodic memories resurfaced in active groups
+### Step 4 — Retention & Personal Atlas *(Done)*
+- [x] **Personal "My Atlas" view:** Open the bot in DM (`/start`, `/map`, or `/atlas`) to see all your own pins across every group + allow solo pinning in DM (`mode=atlas` API + personal Passport + per-chat filters)
+- [x] **Pin reactions & lightweight captions:** Quick emoji reactions (`🍻🔥😂❤️🤯🥂`) inside the detail sheet (`POST /api/pin-reaction`) + owner-only inline caption editor (`POST /api/pin-caption`) & caption search
+- [x] **Pin location editing:** Fix indoor GPS drift directly from the detail sheet with an interactive map crosshair picker (owner-only `POST /api/pin-location` + re-geocoding)
+- [x] **"On this day" nostalgic throwbacks:** Daily background throwback loop + `/throwback [on|off]` command resurfacing past memories with date-filtered map deep links
 
-### Step 5 — Viral Web Sharing & Demand Validation
+---
+
+### Step 5 — Viral Web Sharing & Demand Validation *(Next)*
 - [ ] **Read-only Shareable Trip Web Links (Group Pass perk):** Let groups share a trip map with non-Telegram friends/family on the web — include a subtle *"Want this for your friend group?"* waitlist CTA to directly measure demand for a standalone app
 - [ ] **Permanent Cloud Archive (Cloudflare R2 — Group Pass perk):** Back up group videos so memories survive if Telegram expires `file_id`s or messages are deleted
 - [ ] **Interactive Demo Map on `/start`:** Let first-time visitors tap into a sample trip map before adding the bot to a group

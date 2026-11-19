@@ -9,6 +9,7 @@ import { pauseMarkerVideos, updateVideoPlayback } from './video.js';
 
 let renderTimer = null;  // debounce handle for scheduleRender()
 let usersById = {};      // user_id -> display name for active-filter banner labels
+let chatsById = {};      // chat_id -> title for active-filter banner labels in My Atlas
 
 function showAuthError() {
   document.getElementById('filter-count').textContent = '';
@@ -16,7 +17,9 @@ function showAuthError() {
   var d = document.createElement('div');
   d.id = 'auth-error';
   d.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2000;background:var(--surface,#fff);padding:16px 20px;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,0.28);font-family:-apple-system,sans-serif;font-size:14px;color:var(--text,#444);max-width:80%;text-align:center;';
-  d.textContent = 'Open this map from inside your Telegram group to view it.';
+  d.textContent = state.isAtlas
+    ? 'Open My Atlas from your Telegram bot chat to view it.'
+    : 'Open this map from inside your Telegram group to view it.';
   document.body.appendChild(d);
 }
 
@@ -34,14 +37,26 @@ export function updatePagination() {
 }
 
 export function getServerFilterParams() {
-  var totalCbs = document.querySelectorAll('.filter-user-cb').length;
-  var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
   var params = {};
-  if (totalCbs > 0 && checkedCbs.length !== totalCbs) {
-    if (checkedCbs.length === 0) {
-      params.user_ids = '-1';
-    } else {
-      params.user_ids = Array.from(checkedCbs).map(function(cb) { return cb.value; }).join(',');
+  if (state.isAtlas) {
+    var totalChatCbs = document.querySelectorAll('.filter-chat-cb').length;
+    var checkedChatCbs = document.querySelectorAll('.filter-chat-cb:checked');
+    if (totalChatCbs > 0 && checkedChatCbs.length !== totalChatCbs) {
+      if (checkedChatCbs.length === 0) {
+        params.chat_ids = '0';
+      } else {
+        params.chat_ids = Array.from(checkedChatCbs).map(function(cb) { return cb.value; }).join(',');
+      }
+    }
+  } else {
+    var totalCbs = document.querySelectorAll('.filter-user-cb').length;
+    var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
+    if (totalCbs > 0 && checkedCbs.length !== totalCbs) {
+      if (checkedCbs.length === 0) {
+        params.user_ids = '-1';
+      } else {
+        params.user_ids = Array.from(checkedCbs).map(function(cb) { return cb.value; }).join(',');
+      }
     }
   }
   var dateFrom = document.getElementById('date-from').value;
@@ -50,14 +65,17 @@ export function getServerFilterParams() {
   if (dateTo) params.date_to = dateTo;
   var locText = document.getElementById('filter-location').value.trim();
   if (locText) params.q = locText;
-  if (state.selectedTripId !== null) params.trip_id = state.selectedTripId;
+  if (!state.isAtlas && state.selectedTripId !== null) params.trip_id = state.selectedTripId;
   return Object.keys(params).length ? params : null;
 }
 
 export function loadPins(page, filterParams) {
   var offset = (page - 1) * PAGE_SIZE;
-  var url = '/api/pins?chat_id=' + encodeURIComponent(state.chatId) + '&limit=' + PAGE_SIZE + '&offset=' + offset;
+  var url = state.isAtlas
+    ? '/api/pins?mode=atlas&limit=' + PAGE_SIZE + '&offset=' + offset
+    : '/api/pins?chat_id=' + encodeURIComponent(state.chatId) + '&limit=' + PAGE_SIZE + '&offset=' + offset;
   if (filterParams) {
+    if (filterParams.chat_ids) url += '&chat_ids=' + encodeURIComponent(filterParams.chat_ids);
     if (filterParams.user_ids) url += '&user_ids=' + encodeURIComponent(filterParams.user_ids);
     if (filterParams.date_from) url += '&date_from=' + encodeURIComponent(filterParams.date_from);
     if (filterParams.date_to) url += '&date_to=' + encodeURIComponent(filterParams.date_to);
@@ -82,10 +100,16 @@ export function loadPins(page, filterParams) {
 
 function activeFilterList() {
   var list = [];
-  if (state.selectedTripId !== null) list.push('trip');
-  var totalCbs = document.querySelectorAll('.filter-user-cb').length;
-  var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
-  if (totalCbs > 0 && checkedCbs.length !== totalCbs) list.push('users');
+  if (!state.isAtlas && state.selectedTripId !== null) list.push('trip');
+  if (state.isAtlas) {
+    var totalChatCbs = document.querySelectorAll('.filter-chat-cb').length;
+    var checkedChatCbs = document.querySelectorAll('.filter-chat-cb:checked');
+    if (totalChatCbs > 0 && checkedChatCbs.length !== totalChatCbs) list.push('chats');
+  } else {
+    var totalCbs = document.querySelectorAll('.filter-user-cb').length;
+    var checkedCbs = document.querySelectorAll('.filter-user-cb:checked');
+    if (totalCbs > 0 && checkedCbs.length !== totalCbs) list.push('users');
+  }
   if (document.getElementById('filter-location').value.trim()) list.push('location');
   if (document.getElementById('date-from').value || document.getElementById('date-to').value) list.push('date');
   return list;
@@ -119,6 +143,7 @@ export function resetAllFilters() {
   if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
   state.selectedTripId = null;
   document.querySelectorAll('.filter-user-cb').forEach(function (cb) { cb.checked = true; });
+  document.querySelectorAll('.filter-chat-cb').forEach(function (cb) { cb.checked = true; });
   document.getElementById('filter-location').value = '';
   document.getElementById('date-from').value = '';
   document.getElementById('date-to').value = '';
@@ -173,10 +198,13 @@ function updateFilterIndicators() {
   if (reelBtn) reelBtn.classList.add('hidden');
   countEl.classList.add('hidden');
 
+  var atlasBadge = document.getElementById('atlas-badge');
   if (!hasAny) {
     banner.classList.add('hidden');
+    if (atlasBadge) atlasBadge.classList.toggle('hidden', !state.isAtlas);
     return;
   }
+  if (atlasBadge) atlasBadge.classList.add('hidden');
 
   // Show a compact 1-tap dismiss pill on the map for any non-trip filter (location, friend, dates).
   if (active.length === 1) {
@@ -184,6 +212,14 @@ function updateFilterIndicators() {
     if (only === 'location') {
       if (iconEl) iconEl.textContent = '📍';
       nameEl.textContent = document.getElementById('filter-location').value.trim();
+    } else if (only === 'chats') {
+      var checkedChats = Array.from(document.querySelectorAll('.filter-chat-cb:checked'));
+      if (iconEl) iconEl.textContent = '💬';
+      if (checkedChats.length === 1) {
+        nameEl.textContent = chatsById[checkedChats[0].value] || '1 chat';
+      } else {
+        nameEl.textContent = checkedChats.length + ' chats';
+      }
     } else if (only === 'users') {
       var checked = Array.from(document.querySelectorAll('.filter-user-cb:checked'));
       if (iconEl) iconEl.textContent = '👤';
@@ -194,7 +230,9 @@ function updateFilterIndicators() {
       }
     } else {
       if (iconEl) iconEl.textContent = '📅';
-      nameEl.textContent = 'Date filter';
+      var df = document.getElementById('date-from').value;
+      var dt = document.getElementById('date-to').value;
+      nameEl.textContent = (df && df === dt) ? df : 'Date filter';
     }
   } else {
     if (iconEl) iconEl.textContent = '🔎';
@@ -210,9 +248,28 @@ export function applyLocationFilter(query) {
   state.selectedTripId = null;
   renderTripChips();
   document.querySelectorAll('.filter-user-cb').forEach(function (cb) { cb.checked = true; });
+  document.querySelectorAll('.filter-chat-cb').forEach(function (cb) { cb.checked = true; });
   document.getElementById('date-from').value = '';
   document.getElementById('date-to').value = '';
   input.value = query || '';
+  updateFilterIndicators();
+  state.currentPage = 1;
+  state.skipBoundsFit = false;
+  loadPins(1, getServerFilterParams());
+}
+
+export function applyChatFilter(chatId) {
+  var cidStr = String(chatId);
+  var found = false;
+  document.querySelectorAll('.filter-chat-cb').forEach(function (cb) {
+    var match = cb.value === cidStr;
+    cb.checked = match;
+    if (match) found = true;
+  });
+  if (!found) return;
+  document.getElementById('filter-location').value = '';
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
   updateFilterIndicators();
   state.currentPage = 1;
   state.skipBoundsFit = false;
@@ -314,30 +371,65 @@ export function populateFilters(meta) {
     scheduleRender();
   });
 
-  var sorted = meta.users.sort(function(a, b) { return a.user_name.localeCompare(b.user_name); });
-  usersById = {};
-  var html = '';
-  sorted.forEach(function(u) {
-    usersById[String(u.user_id)] = u.user_name;
-    var dot = u.pin_emoji ? '<span class="emoji-dot">' + esc(u.pin_emoji) + '</span>' : '<span class="color-dot" style="background:' + esc(getColor(u.user_id, u.pin_color)) + '"></span>';
-    html += '<label class="filter-user"><input type="checkbox" class="filter-user-cb" value="' + u.user_id + '" checked>' +
-      dot +
-      '<span class="filter-user-name">' + esc(u.user_name) + '</span></label>';
-  });
-  document.getElementById('user-filters').innerHTML = html;
-  document.getElementById('user-filters').addEventListener('change', scheduleRender);
+  var userSec = document.getElementById('user-section');
+  var chatSec = document.getElementById('chat-section');
+  if (state.isAtlas) {
+    if (userSec) userSec.style.display = 'none';
+    state.atlasChats = meta.chats || [];
+    chatsById = {};
+    if (chatSec) chatSec.style.display = state.atlasChats.length ? '' : 'none';
+    var chHtml = '';
+    state.atlasChats.forEach(function(ch) {
+      chatsById[String(ch.chat_id)] = ch.title;
+      var icon = ch.is_solo ? '👤' : '👥';
+      chHtml += '<label class="filter-user"><input type="checkbox" class="filter-chat-cb" value="' + ch.chat_id + '" checked>' +
+        '<span class="emoji-dot">' + icon + '</span>' +
+        '<span class="filter-user-name">' + esc(ch.title) + '</span>' +
+        '<span class="stamp-cnt">' + ch.pin_count + '</span></label>';
+    });
+    var chatWrap = document.getElementById('chat-filters');
+    if (chatWrap) {
+      chatWrap.innerHTML = chHtml;
+      chatWrap.addEventListener('change', scheduleRender);
+    }
+    var chatAll = document.querySelector('.filter-chat-all');
+    if (chatAll) chatAll.addEventListener('click', function() {
+      document.querySelectorAll('.filter-chat-cb').forEach(function(cb) { cb.checked = true; });
+      scheduleRender();
+    });
+    var chatNone = document.querySelector('.filter-chat-none');
+    if (chatNone) chatNone.addEventListener('click', function() {
+      document.querySelectorAll('.filter-chat-cb').forEach(function(cb) { cb.checked = false; });
+      scheduleRender();
+    });
+  } else {
+    if (chatSec) chatSec.style.display = 'none';
+    if (userSec) userSec.style.display = '';
+    var sorted = (meta.users || []).sort(function(a, b) { return a.user_name.localeCompare(b.user_name); });
+    usersById = {};
+    var html = '';
+    sorted.forEach(function(u) {
+      usersById[String(u.user_id)] = u.user_name;
+      var dot = u.pin_emoji ? '<span class="emoji-dot">' + esc(u.pin_emoji) + '</span>' : '<span class="color-dot" style="background:' + esc(getColor(u.user_id, u.pin_color)) + '"></span>';
+      html += '<label class="filter-user"><input type="checkbox" class="filter-user-cb" value="' + u.user_id + '" checked>' +
+        dot +
+        '<span class="filter-user-name">' + esc(u.user_name) + '</span></label>';
+    });
+    document.getElementById('user-filters').innerHTML = html;
+    document.getElementById('user-filters').addEventListener('change', scheduleRender);
 
-  document.querySelector('.filter-select-all').addEventListener('click', function() {
-    document.querySelectorAll('.filter-user-cb').forEach(function(cb) { cb.checked = true; });
-    scheduleRender();
-  });
-  document.querySelector('.filter-select-none').addEventListener('click', function() {
-    document.querySelectorAll('.filter-user-cb').forEach(function(cb) { cb.checked = false; });
-    scheduleRender();
-  });
+    document.querySelector('.filter-select-all').addEventListener('click', function() {
+      document.querySelectorAll('.filter-user-cb').forEach(function(cb) { cb.checked = true; });
+      scheduleRender();
+    });
+    document.querySelector('.filter-select-none').addEventListener('click', function() {
+      document.querySelectorAll('.filter-user-cb').forEach(function(cb) { cb.checked = false; });
+      scheduleRender();
+    });
+  }
 
-  document.getElementById('date-from').value = '';
-  document.getElementById('date-to').value = '';
+  document.getElementById('date-from').value = state.initialDate || '';
+  document.getElementById('date-to').value = state.initialDate || '';
   var minDate = meta.min_date ? meta.min_date.split('T')[0] : '';
   var maxDate = meta.max_date ? meta.max_date.split('T')[0] : '';
   document.getElementById('date-from').min = minDate;

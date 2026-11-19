@@ -1,16 +1,19 @@
 // Detail overlay: tap a marker -> enlarged video (with sound) + the list of cheers at that spot.
 import { state } from './state.js';
-import { esc, relTime, placeholderGlyph, byNewest, tripDupDate } from './util.js';
+import { esc, relTime, placeholderGlyph, byNewest, tripDupDate, countryFlag, ALLOWED_REACTIONS, showToast } from './util.js';
 import { getColor } from './color.js';
 import { videoUrl, apiPost } from './api.js';
 import { applyTripCountsDelta } from './filters.js';
 import { renderMarkers } from './markers.js';
 import { invalidateStats } from './stats.js';
+import { startRelocate } from './relocate.js';
 import { pauseMarkerVideos, updateVideoPlayback, teardownVideo } from './video.js';
 import { MAX_CONCURRENT_VIDEOS } from './config.js';
 
 let detailIdx = 0;     // which row in the open detail list is selected
 let deletingPin = false;
+let editingCaption = false;
+let savingCaption = false;
 // How the big player behaves: when loop is OFF (the default) it auto-advances newest -> oldest
 // (wrapping); when ON it replays the current clip. Always starts OFF when the player opens; the
 // loop button in the top bar toggles it.
@@ -74,12 +77,35 @@ export function playAll() {
   openDetail(pins, 0);
 }
 
+function pinChatId(pin) {
+  return (pin && pin.chat_id != null) ? pin.chat_id : state.chatId;
+}
+
+function isOwner(pin) {
+  return !!pin && state.currentUserId != null && pin.user_id === state.currentUserId;
+}
+
+function rowReactionSummary(pin) {
+  var rx = pin && pin.reactions;
+  if (!rx || !rx.length) return '';
+  var total = rx.reduce(function (acc, r) { return acc + r.count; }, 0);
+  if (!total) return '';
+  var topEmojis = rx.slice(0, 3).map(function (r) { return r.emoji; }).join('');
+  return topEmojis + ' ' + total;
+}
+
 function renderDetailList() {
   var list = document.getElementById('detail-list');
   var pins = state.detailPins;
   var lh = '';
   pins.forEach(function (p, i) {
     var c = getColor(p.user_id, p.pin_color);
+    var subTag = state.isAtlas
+      ? (p.chat_title ? (p.chat_id === p.user_id ? '👤 ' : '💬 ') + esc(p.chat_title) : '')
+      : rowTripLabel(p);
+    var capHtml = p.caption ? '<div class="dr-caption">' + esc(p.caption) + '</div>' : '<div class="dr-caption"></div>';
+    var rxSummary = rowReactionSummary(p);
+    var rxHtml = '<span class="dr-rx' + (rxSummary ? '' : ' hidden') + '">' + esc(rxSummary) + '</span>';
     lh += '<div class="detail-row" data-idx="' + i + '">' +
       '<div class="detail-thumb" style="box-shadow:0 0 0 2px ' + esc(c) + '">' +
         '<div class="vm-ph" style="background:' + esc(c) + '">' + placeholderGlyph(p) + '</div>' +
@@ -87,8 +113,10 @@ function renderDetailList() {
       '</div>' +
       '<div class="detail-rowtext">' +
         '<div class="dr-line1"><span class="dr-name">' + esc(p.user_name) + '</span> <span class="dr-date">— ' + esc(relTime(p.created_at)) + '</span></div>' +
-        '<div class="dr-trip">' + rowTripLabel(p) + '</div>' +
+        '<div class="dr-trip">' + subTag + '</div>' +
+        capHtml +
       '</div>' +
+      rxHtml +
       '<span class="dr-check">✓</span>' +
     '</div>';
   });
@@ -133,6 +161,8 @@ export function openDetail(pins, idx) {
   if (!pins || !pins.length) return;
   loopMode = false;
   reverseMode = false;
+  editingCaption = false;
+  savingCaption = false;
   tripSel.clear();          // never carry a stale selection into a freshly opened player
   targetTripId = undefined;
   pauseMarkerVideos();
@@ -182,8 +212,9 @@ function refreshRowTrips() {
 function renderTripBar() {
   var bar = document.getElementById('detail-trip-bar');
   var controls = document.getElementById('detail-controls');
-  updateDeleteButton();
-  if (!state.trips.length) { bar.classList.add('hidden'); controls.classList.remove('hidden'); return; }
+  updateOwnerButtons();
+  renderPinMeta();
+  if (state.isAtlas || !state.trips.length) { bar.classList.add('hidden'); controls.classList.remove('hidden'); return; }
   bar.classList.remove('hidden');
   var view = document.getElementById('dtb-view');
   var edit = document.getElementById('dtb-edit');
@@ -301,19 +332,245 @@ function hapticBump() {
   } catch (_) { /* no haptics outside Telegram */ }
 }
 
+function hapticLight() {
+  try {
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.HapticFeedback) Telegram.WebApp.HapticFeedback.impactOccurred('light');
+  } catch (_) { /* no haptics outside Telegram */ }
+}
+
 function hapticSuccess() {
   try {
     if (window.Telegram && Telegram.WebApp && Telegram.WebApp.HapticFeedback) Telegram.WebApp.HapticFeedback.notificationOccurred('success');
   } catch (_) { /* no haptics outside Telegram */ }
 }
 
-function updateDeleteButton() {
-  var btn = document.getElementById('detail-delete');
+function updateOwnerButtons() {
+  var delBtn = document.getElementById('detail-delete');
+  var moveBtn = document.getElementById('detail-move');
+  var cur = state.detailPins && state.detailPins[detailIdx];
+  var canEdit = !inSelectMode() && isOwner(cur);
+  if (delBtn) {
+    delBtn.classList.toggle('hidden', !canEdit);
+    delBtn.disabled = deletingPin;
+  }
+  if (moveBtn) {
+    moveBtn.classList.toggle('hidden', !canEdit);
+    moveBtn.disabled = deletingPin;
+  }
+}
+
+function refreshRowMeta(pin) {
+  if (!pin || !state.detailPins) return;
+  document.querySelectorAll('.detail-row').forEach(function (r) {
+    var p = state.detailPins[parseInt(r.dataset.idx, 10)];
+    if (!p || p.id !== pin.id) return;
+    var capEl = r.querySelector('.dr-caption');
+    if (capEl) capEl.textContent = p.caption || '';
+    var rxEl = r.querySelector('.dr-rx');
+    if (rxEl) {
+      var sum = rowReactionSummary(p);
+      rxEl.textContent = sum;
+      rxEl.classList.toggle('hidden', !sum);
+    }
+  });
+}
+
+function syncPinInAllPins(pinId, patchFn) {
+  state.allPins.forEach(function (p) { if (p.id === pinId) patchFn(p); });
+}
+
+function renderPinMeta() {
+  var wrap = document.getElementById('detail-meta');
+  if (!wrap) return;
+  var cur = state.detailPins && state.detailPins[detailIdx];
+  if (!cur || inSelectMode()) {
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+
+  // Location / chat context line
+  var infoEl = document.getElementById('dm-info');
+  if (infoEl) {
+    var bits = [];
+    var place = [cur.city, cur.country].filter(Boolean).join(', ');
+    var flag = countryFlag(cur.country_code);
+    if (place || flag) bits.push('📍 ' + [place, flag].filter(Boolean).join(' '));
+    if (state.isAtlas && cur.chat_title) {
+      bits.push((cur.chat_id === cur.user_id ? '👤 ' : '💬 ') + cur.chat_title);
+    }
+    infoEl.textContent = bits.join(' · ');
+    infoEl.classList.toggle('hidden', !bits.length);
+  }
+
+  // Caption view vs inline editor
+  var capView = document.getElementById('dm-caption-view');
+  var capEdit = document.getElementById('dm-caption-edit');
+  var capText = document.getElementById('dm-caption-text');
+  var capEditBtn = document.getElementById('dm-caption-btn');
+  var owner = isOwner(cur);
+
+  if (editingCaption && owner) {
+    if (capView) capView.classList.add('hidden');
+    if (capEdit) capEdit.classList.remove('hidden');
+  } else {
+    editingCaption = false;
+    if (capEdit) capEdit.classList.add('hidden');
+    if (capView) {
+      var hasCap = !!(cur.caption && cur.caption.trim());
+      capView.classList.toggle('hidden', !hasCap && !owner);
+      if (capText) {
+        capText.textContent = hasCap ? cur.caption : '';
+        capText.classList.toggle('hidden', !hasCap);
+      }
+      if (capEditBtn) {
+        capEditBtn.classList.toggle('hidden', !owner);
+        capEditBtn.textContent = hasCap ? '✎' : '+ Add caption';
+        capEditBtn.classList.toggle('is-add', !hasCap);
+      }
+    }
+  }
+
+  // Reaction pills (update in place if buttons already exist for this pin's bar, else build once)
+  var rxBar = document.getElementById('dm-reactions');
+  if (rxBar) {
+    var byEmoji = {};
+    (cur.reactions || []).forEach(function (r) { byEmoji[r.emoji] = r; });
+    var existing = rxBar.querySelectorAll('.rx-pill');
+    if (existing.length === ALLOWED_REACTIONS.length) {
+      existing.forEach(function (btn) {
+        var em = btn.dataset.emoji;
+        var item = byEmoji[em];
+        var cnt = item ? item.count : 0;
+        var me = !!(item && item.me);
+        btn.classList.toggle('active', me);
+        btn.setAttribute('aria-pressed', me ? 'true' : 'false');
+        var cntEl = btn.querySelector('.rx-cnt');
+        if (cntEl) {
+          cntEl.textContent = cnt > 0 ? String(cnt) : '';
+          cntEl.classList.toggle('hidden', cnt <= 0);
+        }
+      });
+    } else {
+      var rhtml = '';
+      ALLOWED_REACTIONS.forEach(function (em) {
+        var item = byEmoji[em];
+        var cnt = item ? item.count : 0;
+        var me = !!(item && item.me);
+        rhtml += '<button type="button" class="rx-pill' + (me ? ' active' : '') + '" data-emoji="' + esc(em) + '" aria-pressed="' + (me ? 'true' : 'false') + '">' +
+          '<span class="rx-em">' + esc(em) + '</span>' +
+          '<span class="rx-cnt' + (cnt > 0 ? '' : ' hidden') + '">' + (cnt > 0 ? cnt : '') + '</span>' +
+        '</button>';
+      });
+      rxBar.innerHTML = rhtml;
+    }
+  }
+}
+
+function openCaptionEditor() {
+  var cur = state.detailPins && state.detailPins[detailIdx];
+  if (!isOwner(cur)) return;
+  editingCaption = true;
+  renderPinMeta();
+  var input = document.getElementById('dm-caption-input');
+  if (input) {
+    input.value = cur.caption || '';
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+function closeCaptionEditor() {
+  editingCaption = false;
+  savingCaption = false;
+  renderPinMeta();
+}
+
+function saveCaption() {
+  if (savingCaption) return;
+  var cur = state.detailPins && state.detailPins[detailIdx];
+  if (!isOwner(cur)) return;
+  var input = document.getElementById('dm-caption-input');
+  var saveBtn = document.getElementById('dm-caption-save');
+  if (!input) return;
+  var val = input.value.trim();
+  if (val.length > 140) {
+    showToast('Caption max 140 characters.');
+    return;
+  }
+  savingCaption = true;
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '…'; }
+  apiPost('/api/pin-caption', pinChatId(cur), { pin_id: cur.id, caption: val })
+    .then(function (r) { if (!r.ok) throw new Error('caption ' + r.status); return r.json(); })
+    .then(function (res) {
+      cur.caption = res.caption;
+      syncPinInAllPins(cur.id, function (p) { p.caption = res.caption; });
+      savingCaption = false;
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+      editingCaption = false;
+      renderPinMeta();
+      refreshRowMeta(cur);
+      hapticSuccess();
+    })
+    .catch(function () {
+      savingCaption = false;
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+      showToast('Could not save caption.');
+    });
+}
+
+function onReactionClick(e) {
+  var btn = e.target.closest('.rx-pill');
   if (!btn) return;
   var cur = state.detailPins && state.detailPins[detailIdx];
-  var canDelete = !inSelectMode() && !!cur && state.currentUserId != null && cur.user_id === state.currentUserId;
-  btn.classList.toggle('hidden', !canDelete);
-  btn.disabled = deletingPin;
+  if (!cur) return;
+  var emoji = btn.dataset.emoji;
+  if (!emoji) return;
+  hapticLight();
+
+  // Optimistic toggle
+  var prev = (cur.reactions || []).map(function (r) { return Object.assign({}, r); });
+  var next = prev.map(function (r) { return Object.assign({}, r); });
+  var existing = next.find(function (r) { return r.emoji === emoji; });
+  if (existing && existing.me) {
+    existing.count = Math.max(0, existing.count - 1);
+    existing.me = false;
+    next = next.filter(function (r) { return r.count > 0; });
+  } else if (existing) {
+    existing.count += 1;
+    existing.me = true;
+  } else {
+    next.push({ emoji: emoji, count: 1, me: true });
+  }
+  cur.reactions = next;
+  syncPinInAllPins(cur.id, function (p) { p.reactions = next; });
+  renderPinMeta();
+  refreshRowMeta(cur);
+
+  var pinId = cur.id;
+  apiPost('/api/pin-reaction', pinChatId(cur), { pin_id: pinId, emoji: emoji })
+    .then(function (r) { if (!r.ok) throw new Error('rx ' + r.status); return r.json(); })
+    .then(function (res) {
+      cur.reactions = res.reactions || [];
+      syncPinInAllPins(pinId, function (p) { p.reactions = cur.reactions; });
+      renderPinMeta();
+      refreshRowMeta(cur);
+    })
+    .catch(function () {
+      cur.reactions = prev;
+      syncPinInAllPins(pinId, function (p) { p.reactions = prev; });
+      renderPinMeta();
+      refreshRowMeta(cur);
+      showToast('Could not save reaction.');
+    });
+}
+
+function onMovePin() {
+  if (deletingPin || !state.detailPins || !state.detailPins[detailIdx]) return;
+  var pin = state.detailPins[detailIdx];
+  if (!isOwner(pin)) return;
+  closeDetail(true);  // skip resuming marker videos; relocate mode manages playback
+  startRelocate(pin);
 }
 
 function confirmAction(message, onConfirm) {
@@ -337,12 +594,12 @@ function notifyError(message) {
 function onDeletePin() {
   if (deletingPin || !state.detailPins || !state.detailPins[detailIdx]) return;
   var pin = state.detailPins[detailIdx];
-  if (state.currentUserId == null || pin.user_id !== state.currentUserId) return;
+  if (!isOwner(pin)) return;
 
   confirmAction('Delete this cheers from the map?', function () {
     deletingPin = true;
-    updateDeleteButton();
-    apiPost('/api/delete-pin', state.chatId, { pin_id: pin.id })
+    updateOwnerButtons();
+    apiPost('/api/delete-pin', pinChatId(pin), { pin_id: pin.id })
       .then(function (r) { if (!r.ok) throw new Error('failed ' + r.status); return r.json(); })
       .then(function () {
         deletingPin = false;
@@ -350,7 +607,7 @@ function onDeletePin() {
         invalidateStats();
         state.allPins = state.allPins.filter(function (p) { return p.id !== pin.id; });
         state.totalPins = Math.max(0, state.totalPins - 1);
-        if (pin.trip_id != null) applyTripCountsDelta([{ from: pin.trip_id, to: null }]);
+        if (!state.isAtlas && pin.trip_id != null) applyTripCountsDelta([{ from: pin.trip_id, to: null }]);
         state.detailPins = state.detailPins.filter(function (p) { return p.id !== pin.id; });
         state.skipBoundsFit = true;
         renderMarkers();
@@ -363,7 +620,7 @@ function onDeletePin() {
       })
       .catch(function () {
         deletingPin = false;
-        updateDeleteButton();
+        updateOwnerButtons();
         notifyError('Could not delete this cheers. Please try again.');
       });
   });
@@ -372,8 +629,9 @@ function onDeletePin() {
 function selectDetail(i) {
   if (!state.detailPins || !state.detailPins[i]) return;
   detailIdx = i;
+  editingCaption = false;
   var p = state.detailPins[i];
-  renderTripBar();  // in normal mode this reflects the newly-playing clip's trip
+  renderTripBar();  // refreshes owner buttons, pin meta/reactions, and trip pill
   var big = document.getElementById('detail-big');
   var old = big.querySelector('video');
   if (old) teardownVideo(old);
@@ -383,9 +641,8 @@ function selectDetail(i) {
   v.muted = false;  // the detail view plays with sound; map markers and thumbnails stay muted
   v.loop = loopMode;  // loop replays this clip; otherwise it advances on 'ended'
   v.addEventListener('ended', function () {
-    // Auto-advance hands off to the next clip (wrapping after the oldest). In loop mode v.loop is
-    // set, so 'ended' never fires here — but guard on the mode anyway in case it was just toggled.
-    // nextPlayIndex keeps advancement inside the selected set while tagging.
+    // Don't switch clips out from under the user while they're typing a caption.
+    if (editingCaption) { v.currentTime = 0; var rp = v.play(); if (rp && rp.catch) rp.catch(function () {}); return; }
     if (!loopMode && state.detailPins) selectDetail(nextPlayIndex(i));
   });
   var pr = v.play();
@@ -400,7 +657,7 @@ function selectDetail(i) {
   });
 }
 
-function closeDetail() {
+function closeDetail(skipResume) {
   var overlay = document.getElementById('detail');
   overlay.classList.add('hidden');
   overlay.querySelectorAll('video').forEach(teardownVideo);
@@ -410,26 +667,54 @@ function closeDetail() {
   if (detailIo) { detailIo.disconnect(); detailIo = null; }
   state.detailPins = null;
   deletingPin = false;
+  editingCaption = false;
+  savingCaption = false;
   loopMode = false;
   reverseMode = false;
   tripSel.clear();
   targetTripId = undefined;
-  updateDeleteButton();
-  updateVideoPlayback();  // resume the map previews
+  updateOwnerButtons();
+  renderPinMeta();
+  if (!skipResume) updateVideoPlayback();  // resume the map previews
 }
 
 // Wire the overlay's click handlers (DOM is static, so this runs once at startup).
 export function initDetail() {
   document.getElementById('play-all').addEventListener('click', playAll);
   document.getElementById('detail-delete').addEventListener('click', onDeletePin);
+  var moveBtn = document.getElementById('detail-move');
+  if (moveBtn) moveBtn.addEventListener('click', onMovePin);
   document.getElementById('mode-loop').addEventListener('click', toggleLoop);
   document.getElementById('mode-reverse').addEventListener('click', toggleReverse);
   document.getElementById('dtb-targets').addEventListener('click', onTargetChipClick);
   document.getElementById('pin-trip-apply').addEventListener('click', onTripApply);
   document.getElementById('pin-trip-cancel').addEventListener('click', exitSelect);
+
+  var rxBar = document.getElementById('dm-reactions');
+  if (rxBar) rxBar.addEventListener('click', onReactionClick);
+
+  var capBtn = document.getElementById('dm-caption-btn');
+  if (capBtn) capBtn.addEventListener('click', openCaptionEditor);
+  var capText = document.getElementById('dm-caption-text');
+  if (capText) capText.addEventListener('click', function () {
+    var cur = state.detailPins && state.detailPins[detailIdx];
+    if (isOwner(cur)) openCaptionEditor();
+  });
+  var capSave = document.getElementById('dm-caption-save');
+  if (capSave) capSave.addEventListener('click', saveCaption);
+  var capCancel = document.getElementById('dm-caption-cancel');
+  if (capCancel) capCancel.addEventListener('click', closeCaptionEditor);
+  var capInput = document.getElementById('dm-caption-input');
+  if (capInput) {
+    capInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); saveCaption(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeCaptionEditor(); }
+    });
+  }
+
   document.getElementById('detail').addEventListener('click', function (e) {
-    // keep open when tapping the video, the delete button, or the sheet (which holds the list and the mode toggle)
-    if (e.target.closest('#detail-big') || e.target.closest('#detail-sheet') || e.target.closest('#detail-delete')) return;
+    // keep open when tapping the video, the top action buttons, or the sheet (which holds meta/reactions/list)
+    if (e.target.closest('#detail-big') || e.target.closest('#detail-sheet') || e.target.closest('#detail-actions')) return;
     closeDetail();
   });
 
@@ -438,7 +723,7 @@ export function initDetail() {
   var list = document.getElementById('detail-list');
   list.addEventListener('pointerdown', function (e) {
     var row = e.target.closest('.detail-row');
-    if (!row || !state.trips.length) return;  // no trips -> nothing to tag
+    if (!row || state.isAtlas || !state.trips.length) return;  // no trips (or Atlas) -> nothing to tag
     var idx = parseInt(row.dataset.idx, 10);
     lpFired = false;
     lpStart = { x: e.clientX, y: e.clientY };

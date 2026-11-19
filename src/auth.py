@@ -67,9 +67,14 @@ def extract_init_data(request: web.Request) -> str | None:
 async def is_member(bot, chat_id: int, user_id: int) -> bool:
     """Return True if the user currently belongs to the chat.
 
-    Results are cached for ~_MEMBER_TTL seconds so we make roughly one
+    Private DM chats have positive chat_id equal to the user's own Telegram ID:
+    a user always owns their own DM (for solo pinning) and never belongs to anyone else's.
+    Group results are cached for ~_MEMBER_TTL seconds so we make roughly one
     get_chat_member API call per session. Any error is treated as "not a member".
     """
+    if chat_id > 0:
+        return chat_id == user_id
+
     now = time.time()
     key = (chat_id, user_id)
     cached = _member_cache.get(key)

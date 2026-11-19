@@ -9,13 +9,27 @@ import { updatePagination } from './filters.js';
 import { openDetail } from './detail.js';
 
 function getFilteredPins() {
-  var selected = {};
-  document.querySelectorAll('.filter-user-cb:checked').forEach(function(cb) { selected[cb.value] = true; });
   var dateFrom = document.getElementById('date-from').value;
   var dateTo = document.getElementById('date-to').value;
 
+  if (state.isAtlas) {
+    var allChatCbs = document.querySelectorAll('.filter-chat-cb');
+    var selectedChats = {};
+    allChatCbs.forEach(function(cb) { if (cb.checked) selectedChats[cb.value] = true; });
+    return state.allPins.filter(function(p) {
+      if (allChatCbs.length > 0 && !selectedChats[String(p.chat_id)]) return false;
+      if (dateFrom && p.created_at < dateFrom) return false;
+      if (dateTo && p.created_at.split('T')[0] > dateTo) return false;
+      return true;
+    });
+  }
+
+  var allUserCbs = document.querySelectorAll('.filter-user-cb');
+  var selected = {};
+  allUserCbs.forEach(function(cb) { if (cb.checked) selected[cb.value] = true; });
+
   return state.allPins.filter(function(p) {
-    if (!selected[p.user_id]) return false;
+    if (allUserCbs.length > 0 && !selected[p.user_id]) return false;
     if (dateFrom && p.created_at < dateFrom) return false;
     if (dateTo && p.created_at.split('T')[0] > dateTo) return false;
     return true;
@@ -189,6 +203,7 @@ function addVideoMarker(lat, lng, pins) {
   // A cluster zooms in one level to unbundle; a single pin (or a cluster that can't split any
   // further — coincident points at max zoom) opens the detail player on the latest, then the rest.
   marker.on('click', function () {
+    if (state.relocatingPin) return;
     if (sorted.length > 1 && zoomToSplit(lat, lng, sorted)) return;
     openDetail(sorted, 0);
   });

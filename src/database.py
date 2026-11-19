@@ -7,6 +7,9 @@ from config import DB_PATH
 
 logger = logging.getLogger(__name__)
 
+ALLOWED_REACTIONS = ("🍻", "🔥", "😂", "❤️", "🤯", "🥂")
+MAX_CAPTION_LEN = 140
+
 
 def init_db():
     conn = sqlite3.connect(str(DB_PATH))
@@ -177,6 +180,33 @@ def migrate_db():
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_entitlements_chat ON chat_entitlements(chat_id, entitlement_type, target_id)")
+        try:
+            c.execute("ALTER TABLE pins ADD COLUMN caption TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE chat_settings ADD COLUMN chat_title TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE chat_settings ADD COLUMN throwbacks_enabled INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            c.execute("ALTER TABLE chat_settings ADD COLUMN last_throwback_date TEXT")
+        except sqlite3.OperationalError:
+            pass
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS pin_reactions (
+                pin_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                emoji TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (pin_id, user_id, emoji)
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pin_reactions_pin ON pin_reactions(pin_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pins_user_id ON pins(user_id)")
         conn.commit()
     finally:
         conn.close()
@@ -583,7 +613,27 @@ def get_pin(chat_id, message_id):
         conn.close()
 
 
-def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_to=None, q=None, trip_id=None):
+def _fetch_reactions_map(c, pin_ids, viewer_user_id=None):
+    """Batch-fetch aggregated reactions for a list of pin IDs in one query."""
+    if not pin_ids:
+        return {}
+    placeholders = ",".join("?" for _ in pin_ids)
+    vid = viewer_user_id if viewer_user_id is not None else -1
+    c.execute(
+        f"SELECT pin_id, emoji, COUNT(*), MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END)"
+        f" FROM pin_reactions WHERE pin_id IN ({placeholders}) GROUP BY pin_id, emoji",
+        [vid, *pin_ids],
+    )
+    order = {e: i for i, e in enumerate(ALLOWED_REACTIONS)}
+    by_pin: dict[int, list[dict]] = {}
+    for pid, emoji, cnt, me in c.fetchall():
+        by_pin.setdefault(pid, []).append({"emoji": emoji, "count": cnt, "me": bool(me)})
+    for items in by_pin.values():
+        items.sort(key=lambda x: order.get(x["emoji"], 99))
+    return by_pin
+
+
+def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_to=None, q=None, trip_id=None, viewer_user_id=None):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
@@ -600,8 +650,13 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
             where += " AND p.created_at <= ?"
             params.append(date_to + "T23:59:59")
         if q:
-            where += " AND (INSTR(LOWER(p.city), LOWER(?)) > 0 OR INSTR(LOWER(p.country), LOWER(?)) > 0 OR INSTR(LOWER(p.country_code), LOWER(?)) > 0)"
-            params.extend([q, q, q])
+            where += (
+                " AND (INSTR(LOWER(COALESCE(p.city, '')), LOWER(?)) > 0"
+                " OR INSTR(LOWER(COALESCE(p.country, '')), LOWER(?)) > 0"
+                " OR INSTR(LOWER(COALESCE(p.country_code, '')), LOWER(?)) > 0"
+                " OR INSTR(LOWER(COALESCE(p.caption, '')), LOWER(?)) > 0)"
+            )
+            params.extend([q, q, q, q])
         if trip_id is not None:
             where += " AND p.trip_id = ?"
             params.append(trip_id)
@@ -611,13 +666,14 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
             "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id,"
             " p.latitude, p.longitude, p.created_at, p.video_link,"
             " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''),"
-            " p.city, p.country, p.country_code, p.trip_id"
+            " p.city, p.country, p.country_code, p.trip_id, p.chat_id, p.caption"
             " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
             " " + where + " ORDER BY p.created_at DESC"
             " LIMIT ? OFFSET ?",
             params + [limit, offset],
         )
         rows = c.fetchall()
+        rx_map = _fetch_reactions_map(c, [r[0] for r in rows], viewer_user_id=viewer_user_id)
         return {
             "total": total,
             "limit": limit,
@@ -639,6 +695,9 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
                     "country": r[12],
                     "country_code": r[13],
                     "trip_id": r[14],
+                    "chat_id": r[15],
+                    "caption": r[16],
+                    "reactions": rx_map.get(r[0], []),
                 }
                 for r in rows
             ],
@@ -651,6 +710,10 @@ def delete_chat_pins(chat_id):
     conn = sqlite3.connect(str(DB_PATH))
     try:
         c = conn.cursor()
+        try:
+            c.execute("DELETE FROM pin_reactions WHERE pin_id IN (SELECT id FROM pins WHERE chat_id = ?)", (chat_id,))
+        except Exception:
+            pass
         c.execute("DELETE FROM pins WHERE chat_id = ?", (chat_id,))
         count = c.rowcount
         conn.commit()
@@ -730,6 +793,7 @@ def delete_pin(chat_id, pin_id, user_id):
         if owner_id != user_id:
             c.execute("COMMIT")
             return "forbidden", None
+        c.execute("DELETE FROM pin_reactions WHERE pin_id = ?", (pin_id,))
         c.execute("DELETE FROM pins WHERE id = ? AND chat_id = ? AND user_id = ?", (pin_id, chat_id, user_id))
         c.execute("COMMIT")
         return "ok", {"id": pin_id, "trip_id": trip_id, "video_file_id": video_file_id}
@@ -1013,5 +1077,467 @@ def get_trip_pins_for_reel(chat_id, trip_id, limit=20):
             }
             for r in c.fetchall()
         ]
+    finally:
+        conn.close()
+
+
+def is_file_owner(video_file_id, user_id):
+    """True iff `user_id` owns at least one pin referencing `video_file_id` (used for My Atlas video playback)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT 1 FROM pins WHERE video_file_id = ? AND user_id = ? LIMIT 1", (video_file_id, user_id))
+        return c.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def set_chat_title(chat_id, title):
+    """Cache a group's human-readable title in chat_settings so My Atlas can label pins by source group."""
+    clean = (title or "").strip()
+    if not clean or chat_id > 0:
+        return
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=1)
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                """
+                INSERT INTO chat_settings (chat_id, chat_title, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    chat_title = excluded.chat_title,
+                    updated_at = excluded.updated_at
+                """,
+                (chat_id, clean[:120], now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("set_chat_title failed for chat %s", chat_id, exc_info=True)
+
+
+def _format_atlas_chat_title(chat_id, user_id, stored_title):
+    if chat_id == user_id:
+        return "Solo (DM)"
+    return stored_title or "Group"
+
+
+def get_atlas_pins(user_id, limit=500, offset=0, chat_ids=None, date_from=None, date_to=None, q=None):
+    """All pins owned by `user_id` across every group plus solo DM pins (My Atlas)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        where = "WHERE p.user_id = ?"
+        params = [user_id]
+        if chat_ids:
+            placeholders = ",".join("?" * len(chat_ids))
+            where += " AND p.chat_id IN (" + placeholders + ")"
+            params.extend(chat_ids)
+        if date_from:
+            where += " AND p.created_at >= ?"
+            params.append(date_from)
+        if date_to:
+            where += " AND p.created_at <= ?"
+            params.append(date_to + "T23:59:59")
+        if q:
+            where += (
+                " AND (INSTR(LOWER(COALESCE(p.city, '')), LOWER(?)) > 0"
+                " OR INSTR(LOWER(COALESCE(p.country, '')), LOWER(?)) > 0"
+                " OR INSTR(LOWER(COALESCE(p.country_code, '')), LOWER(?)) > 0"
+                " OR INSTR(LOWER(COALESCE(p.caption, '')), LOWER(?)) > 0)"
+            )
+            params.extend([q, q, q, q])
+        c.execute("SELECT COUNT(*) FROM pins p " + where, params)
+        total = c.fetchone()[0]
+        c.execute(
+            "SELECT p.id, p.message_id, p.user_id, p.user_name, p.video_file_id,"
+            " p.latitude, p.longitude, p.created_at, p.video_link,"
+            " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, ''),"
+            " p.city, p.country, p.country_code, p.trip_id, p.chat_id, p.caption, cs.chat_title"
+            " FROM pins p"
+            " LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+            " LEFT JOIN chat_settings cs ON p.chat_id = cs.chat_id"
+            " " + where + " ORDER BY p.created_at DESC"
+            " LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        )
+        rows = c.fetchall()
+        rx_map = _fetch_reactions_map(c, [r[0] for r in rows], viewer_user_id=user_id)
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "pins": [
+                {
+                    "id": r[0],
+                    "message_id": r[1],
+                    "user_id": r[2],
+                    "user_name": r[3],
+                    "video_file_id": r[4],
+                    "latitude": r[5],
+                    "longitude": r[6],
+                    "created_at": r[7],
+                    "video_link": r[8],
+                    "pin_color": r[9] or None,
+                    "pin_emoji": r[10] or None,
+                    "city": r[11],
+                    "country": r[12],
+                    "country_code": r[13],
+                    "trip_id": r[14],
+                    "chat_id": r[15],
+                    "caption": r[16],
+                    "chat_title": _format_atlas_chat_title(r[15], user_id, r[17]),
+                    "reactions": rx_map.get(r[0], []),
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        conn.close()
+
+
+def get_atlas_meta(user_id):
+    """Filter metadata for a user's personal My Atlas view across all their chats."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT p.chat_id, cs.chat_title, COUNT(p.id)"
+            " FROM pins p LEFT JOIN chat_settings cs ON p.chat_id = cs.chat_id"
+            " WHERE p.user_id = ? GROUP BY p.chat_id ORDER BY COUNT(p.id) DESC",
+            (user_id,),
+        )
+        chats = [
+            {
+                "chat_id": r[0],
+                "title": _format_atlas_chat_title(r[0], user_id, r[1]),
+                "pin_count": r[2],
+                "is_solo": r[0] == user_id,
+            }
+            for r in c.fetchall()
+        ]
+        c.execute("SELECT MIN(created_at), MAX(created_at) FROM pins WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        return {"users": [], "chats": chats, "min_date": row[0], "max_date": row[1], "trips": []}
+    finally:
+        conn.close()
+
+
+def get_atlas_stats(user_id):
+    """Personal Passport & per-group breakdown for a user's My Atlas across all chats."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT p.chat_id, p.latitude, p.longitude, p.city, p.country, p.country_code, p.created_at, cs.chat_title"
+            " FROM pins p LEFT JOIN chat_settings cs ON p.chat_id = cs.chat_id"
+            " WHERE p.user_id = ? ORDER BY p.created_at ASC",
+            (user_id,),
+        )
+        rows = c.fetchall()
+
+        countries: dict[str, dict] = {}
+        cities: dict[tuple[str, str], dict] = {}
+        chats: dict[int, dict] = {}
+        prev_coords: tuple[float, float] | None = None
+        total_km = 0.0
+
+        for cid, lat, lng, city, country, cc, _created_at, stored_title in rows:
+            cc_norm = (cc or "").strip().lower()
+            if country:
+                key = cc_norm or country.lower()
+                entry = countries.get(key)
+                if entry is None:
+                    countries[key] = {"country": country, "country_code": cc_norm or None, "pin_count": 1}
+                else:
+                    entry["pin_count"] += 1
+
+            if city:
+                ckey = (city.lower(), cc_norm)
+                centry = cities.get(ckey)
+                if centry is None:
+                    cities[ckey] = {"city": city, "country_code": cc_norm or None, "pin_count": 1}
+                else:
+                    centry["pin_count"] += 1
+
+            if prev_coords is not None:
+                step_km = _haversine_km(prev_coords[0], prev_coords[1], lat, lng)
+                if step_km >= 0.1:
+                    total_km += step_km
+            prev_coords = (lat, lng)
+
+            ch = chats.get(cid)
+            if ch is None:
+                ch = {
+                    "chat_id": cid,
+                    "title": _format_atlas_chat_title(cid, user_id, stored_title),
+                    "is_solo": cid == user_id,
+                    "pin_count": 0,
+                    "_countries": set(),
+                    "_cities": set(),
+                }
+                chats[cid] = ch
+            ch["pin_count"] += 1
+            if country:
+                ch["_countries"].add(cc_norm or country.lower())
+            if city:
+                ch["_cities"].add((city.lower(), cc_norm))
+
+        chat_rows = [
+            {
+                "chat_id": ch["chat_id"],
+                "title": ch["title"],
+                "is_solo": ch["is_solo"],
+                "pin_count": ch["pin_count"],
+                "country_count": len(ch["_countries"]),
+                "city_count": len(ch["_cities"]),
+            }
+            for ch in sorted(chats.values(), key=lambda x: (-x["pin_count"], x["title"].lower()))
+        ]
+
+        sorted_countries = sorted(countries.values(), key=lambda x: (-x["pin_count"], x["country"].lower()))
+        sorted_cities = sorted(cities.values(), key=lambda x: (-x["pin_count"], x["city"].lower()))[:20]
+
+        return {
+            "mode": "atlas",
+            "total_pins": len(rows),
+            "total_chats": len(chats),
+            "total_countries": len(countries),
+            "total_cities": len(cities),
+            "total_distance_km": round(total_km),
+            "first_pin_at": rows[0][6] if rows else None,
+            "last_pin_at": rows[-1][6] if rows else None,
+            "countries": sorted_countries,
+            "cities": sorted_cities,
+            "chats": chat_rows,
+            "leaderboard": [],
+        }
+    finally:
+        conn.close()
+
+
+def toggle_pin_reaction(chat_id, pin_id, user_id, emoji):
+    """Toggle a reaction emoji on a pin belonging to `chat_id`.
+
+    Returns ("ok", added: bool, reactions: list) or ("not_found", False, [])."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT 1 FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        if not c.fetchone():
+            c.execute("COMMIT")
+            return "not_found", False, []
+        c.execute("SELECT 1 FROM pin_reactions WHERE pin_id = ? AND user_id = ? AND emoji = ?", (pin_id, user_id, emoji))
+        if c.fetchone():
+            c.execute("DELETE FROM pin_reactions WHERE pin_id = ? AND user_id = ? AND emoji = ?", (pin_id, user_id, emoji))
+            added = False
+        else:
+            now = datetime.now(timezone.utc).isoformat()
+            c.execute(
+                "INSERT INTO pin_reactions (pin_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)",
+                (pin_id, user_id, emoji, now),
+            )
+            added = True
+        reactions = _fetch_reactions_map(c, [pin_id], viewer_user_id=user_id).get(pin_id, [])
+        c.execute("COMMIT")
+        return "ok", added, reactions
+    finally:
+        conn.close()
+
+
+def update_pin_caption(chat_id, pin_id, user_id, caption):
+    """Set or clear a pin's caption (owner-only). Returns 'ok', 'not_found', or 'forbidden'."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT user_id FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        row = c.fetchone()
+        if not row:
+            c.execute("COMMIT")
+            return "not_found"
+        if row[0] != user_id:
+            c.execute("COMMIT")
+            return "forbidden"
+        c.execute("UPDATE pins SET caption = ? WHERE id = ? AND chat_id = ? AND user_id = ?", (caption, pin_id, chat_id, user_id))
+        c.execute("COMMIT")
+        return "ok"
+    finally:
+        conn.close()
+
+
+def get_pin_owner(chat_id, pin_id):
+    """Return the owner user_id of a pin in `chat_id`, or None if it doesn't exist."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        row = c.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def update_pin_location(chat_id, pin_id, user_id, lat, lng, city, country, country_code):
+    """Update a pin's coordinates and reverse-geocoded place metadata (owner-only).
+
+    Returns 'ok', 'not_found', or 'forbidden'."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT user_id FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        row = c.fetchone()
+        if not row:
+            c.execute("COMMIT")
+            return "not_found"
+        if row[0] != user_id:
+            c.execute("COMMIT")
+            return "forbidden"
+        c.execute(
+            "UPDATE pins SET latitude = ?, longitude = ?, city = ?, country = ?, country_code = ? WHERE id = ? AND chat_id = ? AND user_id = ?",
+            (lat, lng, city, country, country_code, pin_id, chat_id, user_id),
+        )
+        c.execute("COMMIT")
+        return "ok"
+    finally:
+        conn.close()
+
+
+def get_chat_throwbacks_enabled(chat_id):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT throwbacks_enabled FROM chat_settings WHERE chat_id = ?", (chat_id,))
+        row = c.fetchone()
+        if row is None or row[0] is None:
+            return True
+        return bool(row[0])
+    finally:
+        conn.close()
+
+
+def set_chat_throwbacks_enabled(chat_id, enabled):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO chat_settings (chat_id, throwbacks_enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                throwbacks_enabled = excluded.throwbacks_enabled,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, 1 if enabled else 0, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_throwback_sent(chat_id, date_str):
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT INTO chat_settings (chat_id, last_throwback_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                last_throwback_date = excluded.last_throwback_date,
+                updated_at = excluded.updated_at
+            """,
+            (chat_id, date_str, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_due_throwback_chats(month_day, current_year, today_str):
+    """Group chats (chat_id < 0) that have pins on `month_day` ('MM-DD') from a prior year,
+    have throwbacks enabled (default on), and have not already received a throwback today."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT DISTINCT p.chat_id"
+            " FROM pins p LEFT JOIN chat_settings cs ON p.chat_id = cs.chat_id"
+            " WHERE p.chat_id < 0"
+            " AND SUBSTR(p.created_at, 6, 5) = ?"
+            " AND CAST(SUBSTR(p.created_at, 1, 4) AS INTEGER) < ?"
+            " AND COALESCE(cs.throwbacks_enabled, 1) = 1"
+            " AND COALESCE(cs.last_throwback_date, '') != ?",
+            (month_day, current_year, today_str),
+        )
+        return [r[0] for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_on_this_day_pins(chat_id, month_day, current_year):
+    """All pins in `chat_id` recorded on `month_day` ('MM-DD') in prior years, newest year first."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, user_id, user_name, video_file_id, city, country, country_code, created_at, caption"
+            " FROM pins"
+            " WHERE chat_id = ?"
+            " AND SUBSTR(created_at, 6, 5) = ?"
+            " AND CAST(SUBSTR(created_at, 1, 4) AS INTEGER) < ?"
+            " ORDER BY created_at DESC",
+            (chat_id, month_day, current_year),
+        )
+        return [
+            {
+                "id": r[0],
+                "user_id": r[1],
+                "user_name": r[2],
+                "video_file_id": r[3],
+                "city": r[4],
+                "country": r[5],
+                "country_code": r[6],
+                "created_at": r[7],
+                "caption": r[8],
+            }
+            for r in c.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def get_random_throwback_pin(chat_id, min_age_days=30):
+    """Pick a random nostalgic pin from `chat_id` at least `min_age_days` old (for manual /throwback)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=min_age_days)).isoformat()
+        c.execute(
+            "SELECT id, user_id, user_name, video_file_id, city, country, country_code, created_at, caption"
+            " FROM pins WHERE chat_id = ? AND created_at <= ? ORDER BY RANDOM() LIMIT 1",
+            (chat_id, cutoff),
+        )
+        r = c.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "user_id": r[1],
+            "user_name": r[2],
+            "video_file_id": r[3],
+            "city": r[4],
+            "country": r[5],
+            "country_code": r[6],
+            "created_at": r[7],
+            "caption": r[8],
+        }
     finally:
         conn.close()

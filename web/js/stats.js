@@ -4,7 +4,7 @@ import { esc, countryFlag, formatDistance, placeholderGlyph } from './util.js';
 import { getColor } from './color.js';
 import { authHeaders } from './api.js';
 import { pauseMarkerVideos, updateVideoPlayback } from './video.js';
-import { applyLocationFilter, applyUserFilter } from './filters.js';
+import { applyLocationFilter, applyUserFilter, applyChatFilter } from './filters.js';
 
 let cachedStats = null;
 let loadingStats = false;
@@ -16,11 +16,14 @@ export function invalidateStats() {
 function renderStats(data) {
   var body = document.getElementById('stats-body');
   if (!data || !data.total_pins) {
+    var emptySub = state.isAtlas
+      ? 'Send a circular video note to the bot in DM (or any group) and share your location to build your personal Atlas.'
+      : 'Send a circular video note in your group and share your location to start your passport.';
     body.innerHTML =
       '<div class="stats-empty">' +
         '<div class="stats-empty-icon">🌍</div>' +
         '<div class="stats-empty-title">No cheers pinned yet</div>' +
-        '<div class="stats-empty-sub">Send a circular video note in your group and share your location to start your passport.</div>' +
+        '<div class="stats-empty-sub">' + esc(emptySub) + '</div>' +
       '</div>';
     return;
   }
@@ -36,8 +39,12 @@ function renderStats(data) {
 
   var metaParts = [];
   if (data.total_cities) metaParts.push(data.total_cities + ' ' + (data.total_cities === 1 ? 'city' : 'cities'));
-  if (data.total_trips) metaParts.push(data.total_trips + ' ' + (data.total_trips === 1 ? 'trip' : 'trips'));
-  if (data.total_users) metaParts.push(data.total_users + ' ' + (data.total_users === 1 ? 'friend' : 'friends'));
+  if (state.isAtlas) {
+    if (data.total_chats) metaParts.push(data.total_chats + ' ' + (data.total_chats === 1 ? 'chat' : 'chats'));
+  } else {
+    if (data.total_trips) metaParts.push(data.total_trips + ' ' + (data.total_trips === 1 ? 'trip' : 'trips'));
+    if (data.total_users) metaParts.push(data.total_users + ' ' + (data.total_users === 1 ? 'friend' : 'friends'));
+  }
   if (metaParts.length) {
     html += '<div class="stats-subline">' + esc(metaParts.join(' · ')) + '</div>';
   }
@@ -70,8 +77,32 @@ function renderStats(data) {
     html += '</div></div>';
   }
 
+  // Per-chat breakdown (My Atlas)
+  if (state.isAtlas && data.chats && data.chats.length) {
+    var maxChatPins = data.chats[0].pin_count || 1;
+    html += '<div class="stats-sec"><h4>Your Chats</h4><div class="lb-list">';
+    data.chats.forEach(function (ch, idx) {
+      var pct = Math.max(6, Math.round((ch.pin_count / maxChatPins) * 100));
+      var placeBits = [];
+      if (ch.country_count) placeBits.push(ch.country_count + (ch.country_count === 1 ? ' country' : ' countries'));
+      if (ch.city_count) placeBits.push(ch.city_count + (ch.city_count === 1 ? ' city' : ' cities'));
+      var sub = placeBits.join(' · ') || (ch.is_solo ? 'Personal DM pins' : 'Group cheers');
+      var col = ch.is_solo ? '#2f80ed' : '#2ecc71';
+      html += '<button type="button" class="lb-row" data-cid="' + ch.chat_id + '">' +
+        '<span class="lb-rank">' + (idx + 1) + '</span>' +
+        '<span class="lb-avatar" style="background:' + col + '">' + (ch.is_solo ? '👤' : '👥') + '</span>' +
+        '<span class="lb-main">' +
+          '<span class="lb-top"><span class="lb-name">' + esc(ch.title) + '</span><span class="lb-count">' + ch.pin_count + '</span></span>' +
+          '<span class="lb-bar-track"><span class="lb-bar-fill" style="width:' + pct + '%;background:' + col + '"></span></span>' +
+          '<span class="lb-sub">' + esc(sub) + '</span>' +
+        '</span>' +
+      '</button>';
+    });
+    html += '</div></div>';
+  }
+
   // Leaderboard
-  if (data.leaderboard && data.leaderboard.length) {
+  if (!state.isAtlas && data.leaderboard && data.leaderboard.length) {
     var maxPins = data.leaderboard[0].pin_count || 1;
     html += '<div class="stats-sec"><h4>Friends</h4><div class="lb-list">';
     data.leaderboard.forEach(function (u, idx) {
@@ -117,7 +148,8 @@ export function openStats() {
   document.getElementById('stats-body').innerHTML =
     '<div class="stats-loading"><span class="spinner"></span>Loading passport…</div>';
 
-  fetch('/api/stats?chat_id=' + encodeURIComponent(state.chatId), { headers: authHeaders() })
+  var statsUrl = state.isAtlas ? '/api/stats?mode=atlas' : ('/api/stats?chat_id=' + encodeURIComponent(state.chatId));
+  fetch(statsUrl, { headers: authHeaders() })
     .then(function (r) {
       if (!r.ok) throw new Error('stats ' + r.status);
       return r.json();
@@ -170,6 +202,12 @@ export function initStats() {
       if (uidBtn) {
         closeStats();
         applyUserFilter(uidBtn.dataset.uid);
+        return;
+      }
+      var cidBtn = e.target.closest('[data-cid]');
+      if (cidBtn) {
+        closeStats();
+        applyChatFilter(cidBtn.dataset.cid);
       }
     });
   }

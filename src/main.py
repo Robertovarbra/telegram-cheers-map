@@ -15,10 +15,11 @@ from telegram.ext import (
     filters,
 )
 
-from config import TOKEN, WEB_DIR, WEB_HOST, WEB_PORT, logger
+from config import THROWBACK_CHECK_INTERVAL_SEC, THROWBACK_ENABLED, TOKEN, WEB_DIR, WEB_HOST, WEB_PORT, logger
 from database import delete_stale_pending_pins, init_db, migrate_db
 from telegram_handlers import (
     admin_stats_command,
+    atlas_command,
     cleanup_inactive_chats,
     color_command,
     emoji_command,
@@ -30,7 +31,9 @@ from telegram_handlers import (
     handle_successful_payment,
     handle_video,
     map_command,
+    run_due_throwbacks,
     start,
+    throwback_command,
     trip_command,
 )
 from web_handlers import (
@@ -39,6 +42,9 @@ from web_handlers import (
     handle_delete_pin,
     handle_entitlements,
     handle_health,
+    handle_pin_caption,
+    handle_pin_location,
+    handle_pin_reaction,
     handle_pin_trip,
     handle_pins,
     handle_pins_meta,
@@ -88,6 +94,19 @@ async def _watchdog_loop() -> None:
         await asyncio.sleep(15)
 
 
+async def _throwback_loop(bot) -> None:
+    """Periodic 'On this day' nostalgic memory resurfacing for active groups."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            sent = await run_due_throwbacks(bot)
+            if sent:
+                logger.info("Sent %s 'On this day' throwback(s)", sent)
+        except Exception:
+            logger.warning("Throwback loop iteration failed", exc_info=True)
+        await asyncio.sleep(THROWBACK_CHECK_INTERVAL_SEC)
+
+
 async def main() -> None:
     init_db()
     migrate_db()
@@ -108,6 +127,9 @@ async def main() -> None:
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_post("/api/submit-location", handle_submit_location)
     web_app.router.add_post("/api/pin-trip", handle_pin_trip)
+    web_app.router.add_post("/api/pin-reaction", handle_pin_reaction)
+    web_app.router.add_post("/api/pin-caption", handle_pin_caption)
+    web_app.router.add_post("/api/pin-location", handle_pin_location)
     web_app.router.add_post("/api/delete-pin", handle_delete_pin)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
 
@@ -141,6 +163,8 @@ async def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("admin_stats", admin_stats_command))
     application.add_handler(CommandHandler("map", map_command))
+    application.add_handler(CommandHandler("atlas", atlas_command))
+    application.add_handler(CommandHandler("throwback", throwback_command))
     application.add_handler(CommandHandler("color", color_command))
     application.add_handler(CommandHandler("emoji", emoji_command))
     application.add_handler(CommandHandler("trip", trip_command))
@@ -166,6 +190,8 @@ async def main() -> None:
             _systemd_notify(b"READY=1")
             logger.info("systemd watchdog enabled")
             asyncio.create_task(_watchdog_loop())
+            if THROWBACK_ENABLED:
+                asyncio.create_task(_throwback_loop(application.bot))
 
             await asyncio.Event().wait()
     finally:

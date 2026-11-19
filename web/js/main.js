@@ -1,6 +1,6 @@
 // Entry point: parses the start params, branches to location-share mode, then boots the map.
 import { state } from './state.js';
-import { extractChatIdFromStartParam, extractTripIdFromStartParam } from './util.js';
+import { extractChatIdFromStartParam, extractTripIdFromStartParam, extractDateFromStartParam } from './util.js';
 import { authHeaders } from './api.js';
 import { startLocationShare } from './location-share.js';
 import { populateFilters, loadPins, initFilters, getServerFilterParams } from './filters.js';
@@ -9,6 +9,7 @@ import { updateVideoPlayback } from './video.js';
 import { initDetail } from './detail.js';
 import { initStats } from './stats.js';
 import { initReel } from './reel.js';
+import { initRelocate } from './relocate.js';
 
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
@@ -62,11 +63,12 @@ function getStartParam() {
 
 var startParam = getStartParam();
 var locShare = !!(startParam && startParam.indexOf('loc_') === 0);
+var isAtlas = !locShare && (params.get('mode') === 'atlas' || startParam === 'atlas');
 var chatId = params.get('chat_id');
-if (!chatId) {
+if (!chatId && !isAtlas) {
   chatId = extractChatIdFromStartParam(locShare ? startParam.slice(4) : startParam);
 }
-if (!chatId) {
+if (!isAtlas && !chatId) {
   document.body.innerHTML = '<div style="padding:20px;text-align:center;color:#999">Missing chat ID</div>';
   throw new Error('chat_id required');
 }
@@ -76,9 +78,27 @@ if (locShare) {
   throw new Error('location share mode');  // halt: skip map init below (same pattern as the guard above)
 }
 
-state.chatId = chatId;
+state.isAtlas = isAtlas;
+state.chatId = isAtlas ? null : chatId;
 var tripIdParam = params.get('trip_id');
-state.initialTripId = (tripIdParam && /^\d+$/.test(tripIdParam)) ? parseInt(tripIdParam, 10) : extractTripIdFromStartParam(startParam);
+state.initialTripId = isAtlas
+  ? null
+  : ((tripIdParam && /^\d+$/.test(tripIdParam)) ? parseInt(tripIdParam, 10) : extractTripIdFromStartParam(startParam));
+var dateParam = params.get('date');
+state.initialDate = (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) ? dateParam : extractDateFromStartParam(startParam);
+
+if (isAtlas) {
+  document.title = 'My Atlas — Cheers Map';
+  var statsTitle = document.querySelector('#stats-header .stats-title');
+  if (statsTitle) statsTitle.textContent = 'My Passport';
+  var statsToggle = document.getElementById('stats-toggle');
+  if (statsToggle) {
+    statsToggle.title = 'My Passport';
+    statsToggle.setAttribute('aria-label', 'My Passport');
+  }
+  var atlasBadge = document.getElementById('atlas-badge');
+  if (atlasBadge) atlasBadge.classList.remove('hidden');
+}
 
 const map = L.map('map').setView([0, 0], 2);
 state.map = map;
@@ -110,6 +130,7 @@ initFilters();
 initDetail();
 initStats();
 initReel();
+initRelocate();
 
 document.body.addEventListener('click', function (e) {
   var btn = e.target.closest('#view-all');
@@ -120,9 +141,10 @@ document.body.addEventListener('click', function (e) {
   }
 });
 
-fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId), { headers: authHeaders() })
+var metaUrl = state.isAtlas ? '/api/pins-meta?mode=atlas' : ('/api/pins-meta?chat_id=' + encodeURIComponent(chatId));
+fetch(metaUrl, { headers: authHeaders() })
   .then(function(r) {
-    if (!r.ok) return { users: [], min_date: null, max_date: null };
+    if (!r.ok) return { users: [], chats: [], min_date: null, max_date: null };
     return r.json();
   })
   .then(function(meta) {
@@ -131,6 +153,6 @@ fetch('/api/pins-meta?chat_id=' + encodeURIComponent(chatId), { headers: authHea
   })
   .catch(function(e) {
     console.error('Meta error:', e);
-    populateFilters({ users: [], min_date: null, max_date: null });
+    populateFilters({ users: [], chats: [], min_date: null, max_date: null });
     loadPins(1);
   });

@@ -120,6 +120,19 @@ html, body {
 }
 #trip-banner-clear:active { transform: scale(0.92); }
 
+/* Personal My Atlas top-left badge (shown when no filter pill is active) */
+#atlas-badge {
+  position: absolute; top: 12px; left: 54px; z-index: 1000;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 13px; border-radius: 999px;
+  background: var(--glass-bg); color: var(--text);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm); font-size: 13px; font-weight: 700;
+  pointer-events: none;
+}
+#atlas-badge.hidden { display: none; }
+
 /* Floating top-right action stack: Passport/Stats, Theme toggle, Filters */
 #map-controls {
   position: absolute; top: 12px; right: 12px; z-index: 1000;
@@ -286,17 +299,19 @@ html, body {
 #detail { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; }
 #detail-backdrop { position: absolute; inset: 0; background: rgba(12,14,18,0.76); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
 #detail-close { position: absolute; top: 12px; right: 12px; z-index: 2; width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(0,0,0,0.52); color: #fff; font-size: 18px; line-height: 38px; text-align: center; cursor: pointer; padding: 0; }
-#detail-delete { position: absolute; top: 12px; left: 12px; z-index: 2; width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(0,0,0,0.52); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
-#detail-delete svg { width: 18px; height: 18px; display: block; pointer-events: none; }
-#detail-delete.hidden { display: none; }
-#detail-delete:disabled { opacity: 0.45; cursor: default; }
-#detail-stage { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px; }
-#detail-big { position: relative; width: min(72vw, 300px); height: min(72vw, 300px); border-radius: 50%; overflow: hidden; border: 3px solid #fff; box-shadow: 0 10px 34px rgba(0,0,0,0.6); background: #222; }
+#detail-actions { position: absolute; top: 12px; left: 12px; z-index: 2; display: flex; align-items: center; gap: 8px; }
+.detail-action-btn { width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(0,0,0,0.52); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; transition: transform 0.1s ease; }
+.detail-action-btn:active { transform: scale(0.92); }
+.detail-action-btn svg { width: 18px; height: 18px; display: block; pointer-events: none; }
+.detail-action-btn.hidden { display: none; }
+.detail-action-btn:disabled { opacity: 0.45; cursor: default; }
+#detail-stage { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 20px; }
+#detail-big { position: relative; width: min(68vw, 280px); height: min(68vw, 280px); border-radius: 50%; overflow: hidden; border: 3px solid #fff; box-shadow: 0 10px 34px rgba(0,0,0,0.6); background: #222; }
 #detail-big video { width: 100%; height: 100%; object-fit: cover; display: block; }
 #detail-sheet {
   position: relative; z-index: 1; flex: 0 0 auto;
   background: var(--surface); color: var(--text);
-  border-radius: 20px 20px 0 0; max-height: 42vh; overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 20px 20px 0 0; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain;
   box-shadow: 0 -6px 24px rgba(0,0,0,0.32); padding: 0 0 calc(14px + env(safe-area-inset-bottom));
 }
 .detail-row { display: flex; align-items: center; gap: 12px; padding: 9px 18px; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
@@ -304,16 +319,63 @@ html, body {
 .detail-row.selected { background: var(--row-selected); }
 .dr-check { margin-left: auto; color: var(--accent); font-weight: 700; font-size: 15px; opacity: 0; flex-shrink: 0; }
 .detail-row.selected .dr-check { opacity: 1; }
+.dr-rx { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border); padding: 2px 7px; border-radius: 999px; white-space: nowrap; flex-shrink: 0; }
+.dr-rx.hidden { display: none; }
+.dr-rx + .dr-check { margin-left: 4px; }
 .detail-thumb { position: relative; width: 46px; height: 46px; border-radius: 50%; overflow: hidden; flex-shrink: 0; border: 2px solid var(--surface); background: #888; }
 .detail-thumb video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity 0.3s ease; }
 .detail-thumb video.ready { opacity: 1; }
 .detail-thumb .vm-ph { font-size: 17px; }
-.detail-rowtext { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.detail-rowtext { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: center; }
 .dr-line1 { font-size: 15px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail-rowtext .dr-name { font-weight: 600; }
 .detail-rowtext .dr-date { color: var(--text-muted); }
 .dr-trip { font-size: 11px; color: var(--accent-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .dr-trip:empty { display: none; }
+.dr-caption { font-size: 12px; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.dr-caption:empty { display: none; }
+
+/* Pin metadata, lightweight caption editor & quick emoji reactions */
+#detail-meta { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 7px; background: var(--surface); }
+#detail-meta.hidden { display: none; }
+#dm-info { font-size: 12px; color: var(--text-muted); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#dm-info.hidden { display: none; }
+#dm-caption-view { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 24px; }
+#dm-caption-view.hidden { display: none; }
+#dm-caption-text { font-size: 13px; color: var(--text); font-weight: 500; text-align: center; line-height: 1.35; word-break: break-word; }
+#dm-caption-text.hidden { display: none; }
+#dm-caption-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
+  border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+}
+#dm-caption-btn.is-add { color: var(--accent-text); background: var(--accent-soft); border-color: transparent; padding: 4px 11px; }
+#dm-caption-btn.hidden { display: none; }
+#dm-caption-edit { display: flex; align-items: center; gap: 6px; }
+#dm-caption-edit.hidden { display: none; }
+#dm-caption-input {
+  flex: 1; min-width: 0; min-height: 36px; font-size: 14px;
+  border: 1px solid var(--accent); border-radius: 10px; padding: 6px 10px;
+  background: var(--surface-2); color: var(--text);
+}
+#dm-caption-cancel, #dm-caption-save {
+  min-height: 36px; border-radius: 10px; padding: 0 12px; font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+}
+#dm-caption-cancel { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted); }
+#dm-caption-save { border: none; background: var(--accent); color: #fff; }
+#dm-caption-save:disabled { opacity: 0.5; cursor: default; }
+#dm-reactions { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: nowrap; overflow-x: auto; padding: 2px 0; }
+.rx-pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 34px; padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  font-size: 14px; cursor: pointer; user-select: none; flex-shrink: 0;
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.rx-pill:active { transform: scale(0.92); }
+.rx-pill.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.rx-em { font-size: 15px; line-height: 1; }
+.rx-cnt { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rx-cnt.hidden { display: none; }
 #detail-header { position: sticky; top: 0; z-index: 2; background: var(--surface); box-shadow: 0 1px 0 var(--border); }
 #detail-controls { position: relative; display: flex; align-items: center; justify-content: center; padding: 20px 14px 12px; background: var(--surface); }
 #detail-controls.hidden { display: none; }
@@ -493,10 +555,65 @@ html, body {
 
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--text-muted); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 4px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Owner-only Pin Location Editor (center-crosshair mode) */
+body.relocating #map-controls,
+body.relocating #play-all,
+body.relocating #view-all,
+body.relocating #trip-banner,
+body.relocating #atlas-badge { display: none !important; }
+#relocate-banner, #relocate-crosshair, #relocate-bar { display: none; }
+body.relocating #relocate-banner {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 2200;
+  padding: 9px 16px; border-radius: 16px; max-width: calc(100vw - 32px);
+  background: var(--glass-bg); color: var(--text); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-md); text-align: center; pointer-events: none;
+}
+.relocate-title { font-size: 13px; font-weight: 700; }
+#relocate-coords { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+body.relocating #relocate-crosshair {
+  display: flex; flex-direction: column; align-items: center;
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -100%); z-index: 2100;
+  pointer-events: none;
+}
+.rc-pin {
+  width: 36px; height: 36px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  background: #ff3b30; border: 3px solid #fff; box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+}
+.rc-pin::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+.rc-dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(0,0,0,0.45); margin-top: 4px; border: 1.5px solid #fff; }
+body.relocating #relocate-bar {
+  display: flex; align-items: center; gap: 10px;
+  position: fixed; left: 16px; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 2200;
+  max-width: 420px; margin: 0 auto;
+  padding: 10px; border-radius: 18px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-md);
+}
+#relocate-cancel, #relocate-save {
+  flex: 1; min-height: 44px; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer;
+}
+#relocate-cancel { border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+#relocate-save { border: none; background: var(--accent); color: #fff; }
+#relocate-save:disabled, #relocate-cancel:disabled { opacity: 0.5; cursor: default; }
+
+#app-toast {
+  position: fixed; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 4000;
+  padding: 10px 18px; border-radius: 999px; background: rgba(17, 19, 24, 0.9); color: #fff;
+  font-size: 13px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  pointer-events: none; white-space: nowrap; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis;
+}
+#app-toast.hidden { display: none; }
 </style>
 </head>
 <body>
 <div id="map"></div>
+
+<div id="atlas-badge" class="hidden" aria-label="My Atlas">🌍 My Atlas</div>
 
 <div id="trip-banner" class="hidden" role="status">
   <span id="trip-banner-icon" aria-hidden="true">🍻</span>
@@ -534,7 +651,15 @@ html, body {
         <h4>Trips</h4>
         <div id="trip-filters"></div>
       </div>
-      <div class="filter-section">
+      <div class="filter-section" id="chat-section" style="display:none;">
+        <h4>
+          <span>Chats</span>
+          <button type="button" class="filter-action all filter-chat-all">All</button>
+          <button type="button" class="filter-action none filter-chat-none">None</button>
+        </h4>
+        <div id="chat-filters"></div>
+      </div>
+      <div class="filter-section" id="user-section">
         <h4>
           <span>Friends</span>
           <button type="button" class="filter-action all filter-select-all">All</button>
@@ -543,9 +668,9 @@ html, body {
         <div id="user-filters"></div>
       </div>
       <div class="filter-section">
-        <h4>Location</h4>
+        <h4>Location or Caption</h4>
         <div class="filter-input-wrap">
-          <input type="text" id="filter-location" placeholder="City or country..." class="filter-input">
+          <input type="text" id="filter-location" placeholder="City, country, or caption..." class="filter-input">
           <button id="location-clear" class="hidden" type="button" aria-label="Clear location">✕</button>
         </div>
       </div>
@@ -612,9 +737,14 @@ html, body {
 
 <div id="detail" class="hidden">
   <div id="detail-backdrop"></div>
-  <button id="detail-delete" class="hidden" type="button" title="Delete this cheers" aria-label="Delete this cheers">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-  </button>
+  <div id="detail-actions">
+    <button id="detail-delete" class="detail-action-btn hidden" type="button" title="Delete this cheers" aria-label="Delete this cheers">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+    </button>
+    <button id="detail-move" class="detail-action-btn hidden" type="button" title="Adjust pin location" aria-label="Adjust pin location">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+    </button>
+  </div>
   <button id="detail-close" aria-label="Close">✕</button>
   <div id="detail-stage"><div id="detail-big"></div></div>
   <div id="detail-sheet">
@@ -631,6 +761,19 @@ html, body {
         <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
         </button>
+      </div>
+      <div id="detail-meta" class="hidden">
+        <div id="dm-info" class="hidden"></div>
+        <div id="dm-caption-view" class="hidden">
+          <span id="dm-caption-text" class="hidden"></span>
+          <button id="dm-caption-btn" class="hidden" type="button">+ Add caption</button>
+        </div>
+        <div id="dm-caption-edit" class="hidden">
+          <input id="dm-caption-input" type="text" maxlength="140" placeholder="Add a short caption or drink…">
+          <button id="dm-caption-cancel" type="button">Cancel</button>
+          <button id="dm-caption-save" type="button">Save</button>
+        </div>
+        <div id="dm-reactions" aria-label="Reactions"></div>
       </div>
       <div id="detail-trip-bar" class="hidden">
         <div id="dtb-view">
@@ -653,6 +796,21 @@ html, body {
   </div>
 </div>
 
+<div id="relocate-banner" role="status">
+  <span class="relocate-title">Move map to adjust pin</span>
+  <span id="relocate-coords"></span>
+</div>
+<div id="relocate-crosshair" aria-hidden="true">
+  <div class="rc-pin"></div>
+  <div class="rc-dot"></div>
+</div>
+<div id="relocate-bar">
+  <button id="relocate-cancel" type="button">Cancel</button>
+  <button id="relocate-save" type="button">Save location</button>
+</div>
+
+<div id="app-toast" class="hidden" role="status" aria-live="polite"></div>
+
 <!-- Automatic cache-busting: main.py replaces __ASSET_V__ with a SHA-256 content hash of web/js/*.js
      at startup so every deploy busts Cloudflare/browser caches for the entire ES-module tree. -->
 <script type="importmap">
@@ -666,6 +824,7 @@ html, body {
     "/js/location-share.js": "/js/location-share.js?v=__ASSET_V__",
     "/js/markers.js": "/js/markers.js?v=__ASSET_V__",
     "/js/reel.js": "/js/reel.js?v=__ASSET_V__",
+    "/js/relocate.js": "/js/relocate.js?v=__ASSET_V__",
     "/js/state.js": "/js/state.js?v=__ASSET_V__",
     "/js/stats.js": "/js/stats.js?v=__ASSET_V__",
     "/js/util.js": "/js/util.js?v=__ASSET_V__",

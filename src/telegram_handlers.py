@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 
 from aiohttp import ClientSession
 from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -6,7 +7,7 @@ from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
 from auth import is_member
-from config import ADMIN_USER_IDS, BOT_USERNAME, GROUP_PASS_DAYS, GROUP_PASS_STARS, REEL_PRICE_STARS, logger
+from config import ADMIN_USER_IDS, BOT_USERNAME, GROUP_PASS_DAYS, GROUP_PASS_STARS, REEL_PRICE_STARS, THROWBACK_HOUR_UTC, logger
 from database import (
     add_pin,
     close_trip,
@@ -16,18 +17,25 @@ from database import (
     get_analytics_summary,
     get_chat_entitlements,
     get_chat_setting,
+    get_chat_throwbacks_enabled,
     get_chat_trip_users,
+    get_due_throwback_chats,
+    get_on_this_day_pins,
     get_open_trip_for_member,
     get_open_trips,
     get_pin,
     get_pins_meta,
+    get_random_throwback_pin,
     get_trip,
     get_trip_members,
     get_trip_pins_for_reel,
     is_trip_reel_unlocked,
+    mark_throwback_sent,
     pop_pending_pin,
     record_payment_and_grant,
     set_chat_setting,
+    set_chat_throwbacks_enabled,
+    set_chat_title,
     set_pending_pin,
     set_trip_checklist_msg,
     set_user_pref,
@@ -78,20 +86,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     reply_markup = None
     if BOT_USERNAME:
+        atlas_url = f"https://t.me/{BOT_USERNAME}/map?startapp=atlas"
         add_url = f"https://t.me/{BOT_USERNAME}?startgroup=true&admin=pin_messages+delete_messages"
-        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Add to a Group", url=add_url)]])
+        reply_markup = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("🌍 Open My Atlas", url=atlas_url)],
+                [InlineKeyboardButton("➕ Add to a Group", url=add_url)],
+            ]
+        )
 
     await update.message.reply_text(
         "🍻 Cheers Map\n"
         "Real, unfiltered video-note moments with your friends — pinned to the world map. No filters, no uploads, no feed.\n\n"
         "How it works:\n"
-        "1. Add me to a friend group\n"
-        "2. Send a circular Telegram video note in the group\n"
-        "3. Tap 📍 Share location to pin it on the map\n"
-        "4. Use /map to explore & /trip to group travels together\n\n"
-        "Tip: allow pinning and deleting messages so I can keep the group chat tidy.",
+        "1. Add me to a friend group — or send a video note right here in DM for solo pins\n"
+        "2. Tap 📍 Share location to pin it on the map\n"
+        "3. Use /map in a group, /atlas for your personal map across all chats, & /trip for travels\n\n"
+        "Tip: allow pinning and deleting messages in groups so I can keep the chat tidy.",
         reply_markup=reply_markup,
     )
+
+
+async def atlas_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Open the caller's personal My Atlas (all their pins across every group + solo DM pins)."""
+    if not BOT_USERNAME:
+        await update.message.reply_text("My Atlas is not configured yet (missing BOT_USERNAME).")
+        return
+    atlas_url = f"https://t.me/{BOT_USERNAME}/map?startapp=atlas"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🌍 Open My Atlas", url=atlas_url)]])
+    await update.message.reply_text("🌍 Your personal Cheers Atlas — every pin you've dropped across all groups & solo DMs:", reply_markup=kb)
 
 
 async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -117,7 +140,12 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     deleted = ev.get("pin_deleted", 0)
     map_cmd = ev.get("map_command", 0)
     map_open = ev.get("map_opened", 0)
+    atlas_open = ev.get("atlas_opened", 0)
     stats_open = ev.get("stats_opened", 0)
+    reacted = ev.get("pin_reacted", 0)
+    captioned = ev.get("pin_captioned", 0)
+    relocated = ev.get("pin_relocated", 0)
+    throwbacks = ev.get("throwback_sent", 0)
     reel_prev = ev.get("reel_preview_generated", 0)
     reel_hd = ev.get("reel_hd_generated", 0)
     conv = f"{(created / started * 100):.0f}%" if started else "n/a"
@@ -134,8 +162,9 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• Active: {s['active_chats']} chats, {s['active_users']} users",
         f"• Installs: +{added} / -{removed} (net {added - removed:+d})",
         f"• Pin funnel: {started} started → {created} created ({conv})",
-        f"• Pins deleted: {deleted}",
-        f"• Map: {map_cmd} /map cmds → {map_open} map opens · {stats_open} passport opens",
+        f"• Pin actions: {reacted} reactions · {captioned} captions · {relocated} moves · {deleted} deletes",
+        f"• Maps: {map_cmd} /map cmds → {map_open} group · {atlas_open} atlas · {stats_open} passport",
+        f"• Throwbacks: {throwbacks} sent",
         f"• Reels: {reel_prev} preview · {reel_hd} HD · ⭐ {s['stars_window']} Stars ({s['payments_window']} paid)",
     ]
     if s["top_chats"]:
@@ -148,8 +177,19 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    track("map_command", chat_id=chat_id, user_id=update.effective_user.id if update.effective_user else None)
+    chat = update.effective_chat
+    chat_id = chat.id
+    user_id = update.effective_user.id if update.effective_user else None
+    track("map_command", chat_id=chat_id, user_id=user_id)
+
+    if chat.type == Chat.PRIVATE:
+        atlas_url = f"https://t.me/{BOT_USERNAME}/map?startapp=atlas"
+        keyboard = [[InlineKeyboardButton("🌍 Open My Atlas", url=atlas_url)]]
+        await update.message.reply_text("🌍 My Cheers Atlas", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    if chat.title:
+        set_chat_title(chat_id, chat.title)
     map_url = f"https://t.me/{BOT_USERNAME}/map?startapp=c{chat_id}"
     keyboard = [[InlineKeyboardButton("Open Map", url=map_url)]]
 
@@ -602,7 +642,7 @@ async def _handle_trip_callback(query, context) -> None:
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
-    if chat.type not in ("group", "supergroup"):
+    if chat.type not in (Chat.GROUP, Chat.SUPERGROUP, Chat.PRIVATE):
         return
 
     message = update.message
@@ -615,24 +655,31 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = message.from_user
     user_name = user.full_name or user.username or str(user.id)
 
+    is_private = chat.type == Chat.PRIVATE
     if chat.type == Chat.SUPERGROUP:
         video_link = f"https://t.me/c/{str(chat.id)[4:]}/{message.message_id}"
     elif chat.type == Chat.GROUP:
         video_link = f"tg://openmessage?chat_id={chat.id}&message_id={message.message_id}"
+    elif is_private:
+        video_link = None
     else:
         video_link = message.link
+
+    if not is_private and chat.title:
+        set_chat_title(chat.id, chat.title)
 
     # A one-tap "share location" button opens the Mini App in location mode (startapp=loc_c<chat_id>),
     # which reads the device location and posts it to /api/submit-location. request_location keyboard
     # buttons don't work in groups, so we route through the Mini App instead. Requires BOT_USERNAME for
     # the deep link; without it we fall back to the attachment-menu instructions only.
     reply_markup = None
+    dest = "your Atlas" if is_private else "the map"
     if BOT_USERNAME:
         share_url = f"https://t.me/{BOT_USERNAME}/map?startapp=loc_c{chat.id}"
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("📍 Share location", url=share_url)]])
-        prompt = "Cheers received! Tap 📍 Share location below to pin it on the map — or send your location from the attachment menu."
+        prompt = f"Cheers received! Tap 📍 Share location below to pin it on {dest} — or send your location from the attachment menu."
     else:
-        prompt = "Cheers received! Now tap the 📍 attachment button and send your location to pin it on the map."
+        prompt = f"Cheers received! Now tap the 📍 attachment button and send your location to pin it on {dest}."
 
     bot_reply = await message.reply_text(prompt, reply_markup=reply_markup)
 
@@ -709,8 +756,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     city, country, country_code = await reverse_geocode(location.latitude, location.longitude)
 
-    # Tag with the open trip this user is on (membership is the gate; None -> untagged).
-    trip = get_open_trip_for_member(chat_id, user.id)
+    # Tag with the open trip this user is on (membership is the gate; None -> untagged; trips are group-only).
+    is_private = update.effective_chat.type == Chat.PRIVATE
+    trip = None if is_private else get_open_trip_for_member(chat_id, user.id)
 
     add_pin(
         chat_id=chat_id,
@@ -731,7 +779,12 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     location_msg_id = update.effective_message.message_id
     prompt_msg_id = pending.get("prompt_msg_id")
 
-    confirm_text = f"Pinned to trip '{trip['name']}'! Use /map to view the cheers map." if trip else "Pinned! Use /map to view the cheers map."
+    if is_private:
+        confirm_text = "Pinned to your Atlas! Use /map to explore your personal map."
+    elif trip:
+        confirm_text = f"Pinned to trip '{trip['name']}'! Use /map to view the cheers map."
+    else:
+        confirm_text = "Pinned! Use /map to view the cheers map."
     confirmation = await context.bot.send_message(chat_id, confirm_text)
 
     await asyncio.sleep(3)
@@ -753,6 +806,9 @@ async def cleanup_inactive_chats(bot):
 
     total_deleted = 0
     for chat_id in chat_ids:
+        # Private DM chats (chat_id > 0) hold personal solo Atlas pins — never purge them via group-kick checks.
+        if chat_id > 0:
+            continue
         try:
             chat = await bot.get_chat(chat_id)
             try:
@@ -818,12 +874,14 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
     logger.info("Tracked %s for chat %s (by user %s)", event, cm.chat.id, actor_id)
 
     if event == "bot_added":
+        if cm.chat.title:
+            set_chat_title(cm.chat.id, cm.chat.title)
         try:
             await context.bot.send_message(
                 cm.chat.id,
                 "🍻 Cheers Map is ready!\n"
                 "Send a circular video note in this group, then tap 📍 Share location to drop your first pin on the map.\n\n"
-                "Commands: /map · /trip · /color · /emoji\n"
+                "Commands: /map · /trip · /atlas · /throwback · /color · /emoji\n"
                 "(Granting pin & delete-message permissions keeps the chat tidy.)",
             )
         except Exception as e:
@@ -929,3 +987,151 @@ async def handle_successful_payment(update: Update, context: ContextTypes.DEFAUL
             f"✨ Group Pass active for {GROUP_PASS_DAYS} days! Everyone in your group now has unlimited HD unwatermarked Trip Recap Reels.",
             reply_markup=reply_markup,
         )
+
+
+def _country_flag(cc: str | None) -> str:
+    if not cc or len(cc) != 2 or not cc.isalpha():
+        return ""
+    up = cc.upper()
+    return chr(0x1F1E6 + ord(up[0]) - 65) + chr(0x1F1E6 + ord(up[1]) - 65)
+
+
+def _format_place(pin: dict) -> str:
+    parts = [p for p in (pin.get("city"), pin.get("country")) if p]
+    flag = _country_flag(pin.get("country_code"))
+    place = ", ".join(parts)
+    if place and flag:
+        return f"{place} {flag}"
+    return place or flag
+
+
+async def _send_throwback(bot, chat_id: int, pins: list[dict], *, is_on_this_day: bool, now: datetime | None = None) -> bool:
+    """Post a nostalgic throwback card (featured video note + summary + deep link) to `chat_id`."""
+    if not pins:
+        return False
+    now_dt = now or datetime.now(timezone.utc)
+    featured = pins[0]
+    try:
+        pin_dt = datetime.fromisoformat(featured["created_at"])
+        date_label = pin_dt.strftime("%b %d, %Y").replace(" 0", " ")
+        date_compact = pin_dt.strftime("%Y%m%d")
+        years_ago = max(1, now_dt.year - pin_dt.year)
+    except ValueError:
+        date_label = featured["created_at"][:10]
+        date_compact = date_label.replace("-", "")
+        years_ago = 1
+
+    if is_on_this_day:
+        yr_word = "year" if years_ago == 1 else "years"
+        header = f"🕰️ On this day {years_ago} {yr_word} ago ({date_label})"
+    else:
+        header = f"🕰️ Cheers flashback · {date_label}"
+
+    place = _format_place(featured)
+    same_day = [p for p in pins if (p.get("created_at") or "")[:10] == (featured.get("created_at") or "")[:10]]
+    names = list(dict.fromkeys(p["user_name"] for p in same_day))
+    if len(same_day) == 1:
+        who = featured["user_name"]
+    else:
+        who = f"{len(same_day)} cheers from " + ", ".join(names[:3]) + ("…" if len(names) > 3 else "")
+
+    lines = [header]
+    if place:
+        lines.append(f"📍 {place} · {who}")
+    else:
+        lines.append(f"🍻 {who}")
+    if featured.get("caption"):
+        lines.append(f"“{featured['caption']}”")
+
+    reply_markup = None
+    if BOT_USERNAME:
+        sp = f"c{chat_id}_d{date_compact}" if len(date_compact) == 8 and date_compact.isdigit() else f"c{chat_id}"
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🗺️ View on Map", url=f"https://t.me/{BOT_USERNAME}/map?startapp={sp}")]])
+
+    video_msg_id = None
+    try:
+        vmsg = await bot.send_video_note(chat_id=chat_id, video_note=featured["video_file_id"])
+        video_msg_id = vmsg.message_id
+    except (Forbidden, BadRequest) as e:
+        # If the bot was removed/blocked, abort so we don't also fail on send_message.
+        if isinstance(e, Forbidden) or "chat not found" in str(e).lower():
+            logger.info("Skipping throwback for inaccessible chat %s: %s", chat_id, e)
+            return False
+        logger.info("Could not resend video note for throwback in chat %s: %s", chat_id, e)
+    except Exception as e:
+        logger.info("Could not resend video note for throwback in chat %s: %s", chat_id, e)
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="\n".join(lines),
+            reply_to_message_id=video_msg_id,
+            reply_markup=reply_markup,
+        )
+        return True
+    except Exception as e:
+        logger.info("Could not send throwback message to chat %s: %s", chat_id, e)
+        return False
+
+
+async def throwback_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual throwback trigger and toggle (`/throwback`, `/throwback on`, `/throwback off`)."""
+    chat = update.effective_chat
+    if chat.type not in (Chat.GROUP, Chat.SUPERGROUP):
+        await update.message.reply_text("Throwbacks only work in groups.")
+        return
+    if chat.title:
+        set_chat_title(chat.id, chat.title)
+
+    args = [a.lower() for a in (context.args or [])]
+    if args and args[0] in ("off", "disable", "stop"):
+        set_chat_throwbacks_enabled(chat.id, False)
+        await update.message.reply_text("🔕 Automatic 'On this day' throwbacks are now OFF for this group. Use /throwback on to re-enable.")
+        return
+    if args and args[0] in ("on", "enable", "start"):
+        set_chat_throwbacks_enabled(chat.id, True)
+        await update.message.reply_text("🕰️ Automatic 'On this day' throwbacks are now ON for this group!")
+        return
+
+    now = datetime.now(timezone.utc)
+    month_day = now.strftime("%m-%d")
+    otd_pins = get_on_this_day_pins(chat.id, month_day, now.year)
+    if otd_pins:
+        sent = await _send_throwback(context.bot, chat.id, otd_pins, is_on_this_day=True, now=now)
+        if sent:
+            track("throwback_sent", chat_id=chat.id, user_id=update.effective_user.id if update.effective_user else None)
+        return
+
+    flashback = get_random_throwback_pin(chat.id, min_age_days=14)
+    if flashback:
+        sent = await _send_throwback(context.bot, chat.id, [flashback], is_on_this_day=False, now=now)
+        if sent:
+            track("throwback_sent", chat_id=chat.id, user_id=update.effective_user.id if update.effective_user else None)
+        return
+
+    status = "ON" if get_chat_throwbacks_enabled(chat.id) else "OFF"
+    await update.message.reply_text(
+        f"🕰️ No memories old enough for a throwback yet — keep dropping cheers!\n"
+        f"(Automatic 'On this day' throwbacks are {status}. Toggle with /throwback on or /throwback off.)"
+    )
+
+
+async def run_due_throwbacks(bot, now: datetime | None = None) -> int:
+    """Check all active groups for 'On this day' memories from prior years and post once per day."""
+    now_dt = now or datetime.now(timezone.utc)
+    if now_dt.hour < THROWBACK_HOUR_UTC:
+        return 0
+    month_day = now_dt.strftime("%m-%d")
+    today_str = now_dt.strftime("%Y-%m-%d")
+    due_chats = get_due_throwback_chats(month_day, now_dt.year, today_str)
+    sent_count = 0
+    for chat_id in due_chats:
+        pins = get_on_this_day_pins(chat_id, month_day, now_dt.year)
+        if not pins:
+            continue
+        # Record today's attempt first so a flaky Telegram error never causes repeat spam in a loop.
+        mark_throwback_sent(chat_id, today_str)
+        if await _send_throwback(bot, chat_id, pins, is_on_this_day=True, now=now_dt):
+            track("throwback_sent", chat_id=chat_id)
+            sent_count += 1
+    return sent_count
