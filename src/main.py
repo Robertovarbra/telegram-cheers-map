@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import socket
 
@@ -37,9 +38,27 @@ from web_handlers import (
     handle_pin_trip,
     handle_pins,
     handle_pins_meta,
+    handle_stats,
     handle_submit_location,
     handle_video_proxy,
 )
+
+
+def _compute_asset_version() -> str:
+    """Content hash of web/js/*.js so every deploy automatically busts Cloudflare/browser caches
+    for the entire ES module import map without manual ?v= bumps."""
+    h = hashlib.sha256()
+    js_dir = WEB_DIR / "js"
+    if js_dir.is_dir():
+        for p in sorted(js_dir.glob("*.js")):
+            h.update(p.name.encode())
+            h.update(p.read_bytes())
+    return h.hexdigest()[:10]
+
+
+def render_index_html() -> str:
+    version = _compute_asset_version()
+    return (WEB_DIR / "index.html").read_text(encoding="utf-8").replace("__ASSET_V__", version)
 
 
 def _systemd_notify(msg: bytes) -> None:
@@ -73,6 +92,7 @@ async def main() -> None:
     web_app.router.add_get("/api/health", handle_health)
     web_app.router.add_get("/api/pins", handle_pins)
     web_app.router.add_get("/api/pins-meta", handle_pins_meta)
+    web_app.router.add_get("/api/stats", handle_stats)
     web_app.router.add_get("/api/chat", handle_chat)
     web_app.router.add_get("/api/video", handle_video_proxy)
     web_app.router.add_post("/api/submit-location", handle_submit_location)
@@ -80,10 +100,15 @@ async def main() -> None:
     web_app.router.add_post("/api/delete-pin", handle_delete_pin)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
 
-    async def index_handler(_request: web.Request) -> web.FileResponse:
-        resp = web.FileResponse(WEB_DIR / "index.html")
-        resp.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
-        return resp
+    index_html = render_index_html()
+
+    async def index_handler(_request: web.Request) -> web.Response:
+        return web.Response(
+            text=index_html,
+            content_type="text/html",
+            charset="utf-8",
+            headers={"Cache-Control": "public, max-age=0, must-revalidate"},
+        )
 
     web_app.router.add_get("/", index_handler)
     # Public static front-end modules (same trust level as index.html — no secrets). aiohttp

@@ -9,7 +9,18 @@ from aiohttp import ClientTimeout, web
 
 from auth import extract_init_data, is_member, verify_init_data
 from config import VIDEO_CACHE_DIR, VIDEO_CACHE_MAX_BYTES, logger
-from database import add_pin, delete_pin, get_chat_ids_for_file, get_open_trip_for_member, get_pins, get_pins_meta, pop_pending_pin, set_pins_trip, track
+from database import (
+    add_pin,
+    delete_pin,
+    get_chat_ids_for_file,
+    get_chat_stats,
+    get_open_trip_for_member,
+    get_pins,
+    get_pins_meta,
+    pop_pending_pin,
+    set_pins_trip,
+    track,
+)
 from telegram_handlers import reverse_geocode
 
 # Cache the file_id -> Telegram CDN path so a marker re-fetched on every pan/zoom/loop doesn't hit
@@ -463,3 +474,24 @@ async def handle_delete_pin(request: web.Request) -> web.Response:
 
     track("pin_deleted", chat_id=chat_id, user_id=user_id)
     return web.json_response({"ok": True, "pin_id": pin_id, "trip_id": info["trip_id"]})
+
+
+async def handle_stats(request: web.Request) -> web.Response:
+    """Group Passport & leaderboard stats for a single authorized chat."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+
+    try:
+        track("stats_opened", chat_id=chat_id, user_id=int(data["user"]["id"]))
+        return web.json_response(get_chat_stats(chat_id))
+    except Exception:
+        logger.warning("handle_stats failed for chat %s", chat_id, exc_info=True)
+        return web.json_response({"error": "internal error"}, status=400)

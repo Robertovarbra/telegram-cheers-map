@@ -13,7 +13,7 @@ function showAuthError() {
   if (document.getElementById('auth-error')) return;
   var d = document.createElement('div');
   d.id = 'auth-error';
-  d.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2000;background:#fff;padding:16px 20px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.25);font-family:-apple-system,sans-serif;font-size:14px;color:#444;max-width:80%;text-align:center;';
+  d.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2000;background:var(--surface,#fff);padding:16px 20px;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,0.28);font-family:-apple-system,sans-serif;font-size:14px;color:var(--text,#444);max-width:80%;text-align:center;';
   d.textContent = 'Open this map from inside your Telegram group to view it.';
   document.body.appendChild(d);
 }
@@ -86,7 +86,65 @@ function hasClientFilters() {
   return document.getElementById('filter-bounds').checked;
 }
 
+function updateFilterIndicators() {
+  var dot = document.getElementById('filter-active-dot');
+  var hasServer = !!getServerFilterParams();
+  var hasClient = hasClientFilters();
+  if (dot) dot.classList.toggle('hidden', !(hasServer || hasClient));
+
+  var banner = document.getElementById('trip-banner');
+  if (!banner) return;
+  if (state.selectedTripId === null) {
+    banner.classList.add('hidden');
+    return;
+  }
+  var t = state.trips.find(function (x) { return x.id === state.selectedTripId; });
+  if (!t) {
+    banner.classList.add('hidden');
+    return;
+  }
+  document.getElementById('trip-banner-name').textContent = t.name;
+  document.getElementById('trip-banner-count').textContent = String(t.pin_count);
+  banner.classList.remove('hidden');
+}
+
+export function applyLocationFilter(query) {
+  var input = document.getElementById('filter-location');
+  if (!input) return;
+  state.selectedTripId = null;
+  renderTripChips();
+  document.querySelectorAll('.filter-user-cb').forEach(function (cb) { cb.checked = true; });
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  input.value = query || '';
+  updateFilterIndicators();
+  state.currentPage = 1;
+  state.skipBoundsFit = false;
+  loadPins(1, getServerFilterParams());
+}
+
+export function applyUserFilter(userId) {
+  var uidStr = String(userId);
+  var found = false;
+  document.querySelectorAll('.filter-user-cb').forEach(function (cb) {
+    var match = cb.value === uidStr;
+    cb.checked = match;
+    if (match) found = true;
+  });
+  if (!found) return;
+  state.selectedTripId = null;
+  renderTripChips();
+  document.getElementById('filter-location').value = '';
+  document.getElementById('date-from').value = '';
+  document.getElementById('date-to').value = '';
+  updateFilterIndicators();
+  state.currentPage = 1;
+  state.skipBoundsFit = false;
+  loadPins(1, getServerFilterParams());
+}
+
 function scheduleRender() {
+  updateFilterIndicators();
   if (renderTimer) clearTimeout(renderTimer);
   renderTimer = setTimeout(function() {
     var serverFilters = getServerFilterParams();
@@ -140,6 +198,7 @@ export function applyTripCountsDelta(moves) {
     if (counts[t.id]) t.pin_count = Math.max(0, t.pin_count + counts[t.id]);
   });
   renderTripChips();
+  updateFilterIndicators();
 }
 
 export function populateFilters(meta) {
@@ -212,9 +271,23 @@ export function populateFilters(meta) {
 
   document.getElementById('filter-toggle').addEventListener('click', function() {
     var p = document.getElementById('filter-panel');
-    p.classList.toggle('hidden');
-    this.textContent = p.classList.contains('hidden') ? '🔽' : '🔼';
+    var open = p.classList.toggle('hidden') === false;
+    this.classList.toggle('active', open);
+    this.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
+
+  var tripBannerClear = document.getElementById('trip-banner-clear');
+  if (tripBannerClear) {
+    tripBannerClear.addEventListener('click', function() {
+      state.selectedTripId = null;
+      renderTripChips();
+      updateFilterIndicators();
+      state.currentPage = 1;
+      state.skipBoundsFit = false;
+      loadPins(1, getServerFilterParams());
+    });
+  }
+  updateFilterIndicators();
 }
 
 // Wire the pagination buttons (DOM is static, so this runs once at startup).

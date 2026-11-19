@@ -62,10 +62,55 @@ function zoomToSplit(lat, lng, pins) {
   return false;
 }
 
+export function renderTripRoute(filteredPins) {
+  if (!state.routeGroup) return;
+  state.routeGroup.clearLayers();
+  if (state.selectedTripId === null) return;
+  var pins = filteredPins || getFilteredPins();
+  if (pins.length < 2) return;
+
+  // Order oldest -> newest and skip consecutive points at the exact same spot (~20m) so a
+  // multi-cheer cluster at one bar doesn't add degenerate zero-length segments.
+  var ordered = pins.slice().sort(function (a, b) { return a.created_at.localeCompare(b.created_at); });
+  var pts = [];
+  ordered.forEach(function (p) {
+    if (!pts.length) {
+      pts.push([p.latitude, p.longitude]);
+      return;
+    }
+    var prev = pts[pts.length - 1];
+    if (Math.abs(prev[0] - p.latitude) > 0.0002 || Math.abs(prev[1] - p.longitude) > 0.0002) {
+      pts.push([p.latitude, p.longitude]);
+    }
+  });
+  if (pts.length < 2) return;
+
+  var dark = state.theme === 'dark';
+  L.polyline(pts, {
+    color: dark ? '#000000' : '#ffffff',
+    weight: 6,
+    opacity: dark ? 0.55 : 0.85,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false,
+  }).addTo(state.routeGroup);
+
+  L.polyline(pts, {
+    color: dark ? '#58a6ff' : '#2f80ed',
+    weight: 3,
+    opacity: 0.9,
+    dashArray: '7 7',
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false,
+  }).addTo(state.routeGroup);
+}
+
 export function renderMarkers() {
   state.markerGroup.clearLayers();
   state.videoMarkers = [];
   var filtered = getFilteredPins();
+  renderTripRoute(filtered);
   if (filtered.length === 0) {
     document.getElementById('filter-count').textContent = '0 pins match filters';
     document.getElementById('pagination').style.display = 'none';

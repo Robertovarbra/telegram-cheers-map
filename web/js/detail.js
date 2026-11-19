@@ -5,6 +5,7 @@ import { getColor } from './color.js';
 import { videoUrl, apiPost } from './api.js';
 import { applyTripCountsDelta } from './filters.js';
 import { renderMarkers } from './markers.js';
+import { invalidateStats } from './stats.js';
 import { pauseMarkerVideos, updateVideoPlayback, teardownVideo } from './video.js';
 import { MAX_CONCURRENT_VIDEOS } from './config.js';
 
@@ -346,6 +347,7 @@ function onDeletePin() {
       .then(function () {
         deletingPin = false;
         hapticSuccess();
+        invalidateStats();
         state.allPins = state.allPins.filter(function (p) { return p.id !== pin.id; });
         state.totalPins = Math.max(0, state.totalPins - 1);
         if (pin.trip_id != null) applyTripCountsDelta([{ from: pin.trip_id, to: null }]);

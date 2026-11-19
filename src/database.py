@@ -1,4 +1,5 @@
 import logging
+import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -754,6 +755,112 @@ def get_analytics_summary(days=7):
             "pins_in_window": pins_in_window,
             "events": events,
             "top_chats": top_chats,
+        }
+    finally:
+        conn.close()
+
+
+def _haversine_km(lat1, lng1, lat2, lng2):
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def get_chat_stats(chat_id):
+    """Passport & leaderboard summary for a single chat (used by GET /api/stats)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT p.user_id, p.user_name, p.latitude, p.longitude, p.city, p.country, p.country_code, p.created_at,"
+            " COALESCE(up.pin_color, ''), COALESCE(up.pin_emoji, '')"
+            " FROM pins p LEFT JOIN user_preferences up ON p.user_id = up.user_id"
+            " WHERE p.chat_id = ? ORDER BY p.created_at ASC",
+            (chat_id,),
+        )
+        rows = c.fetchall()
+
+        c.execute("SELECT COUNT(*) FROM trips WHERE chat_id = ?", (chat_id,))
+        total_trips = c.fetchone()[0]
+
+        countries: dict[str, dict] = {}
+        cities: dict[tuple[str, str], dict] = {}
+        users: dict[int, dict] = {}
+        total_km = 0.0
+        prev_coords = None
+
+        for uid, uname, lat, lng, city, country, cc, _created_at, color, emoji in rows:
+            if prev_coords is not None:
+                total_km += _haversine_km(prev_coords[0], prev_coords[1], lat, lng)
+            prev_coords = (lat, lng)
+
+            cc_norm = (cc or "").strip().lower()
+            if country:
+                key = cc_norm or country.lower()
+                entry = countries.get(key)
+                if entry is None:
+                    countries[key] = {"country": country, "country_code": cc_norm or None, "pin_count": 1}
+                else:
+                    entry["pin_count"] += 1
+
+            if city:
+                ckey = (city.lower(), cc_norm)
+                centry = cities.get(ckey)
+                if centry is None:
+                    cities[ckey] = {"city": city, "country_code": cc_norm or None, "pin_count": 1}
+                else:
+                    centry["pin_count"] += 1
+
+            u = users.get(uid)
+            if u is None:
+                u = {
+                    "user_id": uid,
+                    "user_name": uname,
+                    "pin_color": color or None,
+                    "pin_emoji": emoji or None,
+                    "pin_count": 0,
+                    "_countries": set(),
+                    "_cities": set(),
+                }
+                users[uid] = u
+            u["user_name"] = uname  # chronological scan -> freshest display name wins
+            u["pin_count"] += 1
+            if country:
+                u["_countries"].add(cc_norm or country.lower())
+            if city:
+                u["_cities"].add((city.lower(), cc_norm))
+
+        leaderboard = [
+            {
+                "user_id": u["user_id"],
+                "user_name": u["user_name"],
+                "pin_color": u["pin_color"],
+                "pin_emoji": u["pin_emoji"],
+                "pin_count": u["pin_count"],
+                "country_count": len(u["_countries"]),
+                "city_count": len(u["_cities"]),
+            }
+            for u in sorted(users.values(), key=lambda x: (-x["pin_count"], x["user_name"].lower()))
+        ]
+
+        sorted_countries = sorted(countries.values(), key=lambda x: (-x["pin_count"], x["country"].lower()))
+        sorted_cities = sorted(cities.values(), key=lambda x: (-x["pin_count"], x["city"].lower()))[:20]
+
+        return {
+            "total_pins": len(rows),
+            "total_users": len(users),
+            "total_trips": total_trips,
+            "total_countries": len(countries),
+            "total_cities": len(cities),
+            "total_distance_km": round(total_km),
+            "first_pin_at": rows[0][7] if rows else None,
+            "last_pin_at": rows[-1][7] if rows else None,
+            "countries": sorted_countries,
+            "cities": sorted_cities,
+            "leaderboard": leaderboard,
         }
     finally:
         conn.close()

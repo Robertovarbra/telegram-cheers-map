@@ -113,6 +113,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     deleted = ev.get("pin_deleted", 0)
     map_cmd = ev.get("map_command", 0)
     map_open = ev.get("map_opened", 0)
+    stats_open = ev.get("stats_opened", 0)
     conv = f"{(created / started * 100):.0f}%" if started else "n/a"
 
     lines = [
@@ -127,7 +128,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• Installs: +{added} / -{removed} (net {added - removed:+d})",
         f"• Pin funnel: {started} started → {created} created ({conv})",
         f"• Pins deleted: {deleted}",
-        f"• Map: {map_cmd} /map cmds → {map_open} map opens",
+        f"• Map: {map_cmd} /map cmds → {map_open} map opens · {stats_open} passport opens",
     ]
     if s["top_chats"]:
         lines.append("")

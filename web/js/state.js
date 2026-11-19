@@ -4,7 +4,10 @@
 export const state = {
   chatId: null,
   currentUserId: null,
+  theme: 'light',
   map: null,
+  tileLayer: null,
+  routeGroup: null,
   markerGroup: null,
   allPins: [],
   totalPins: 0,
