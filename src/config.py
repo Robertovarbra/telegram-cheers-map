@@ -59,3 +59,8 @@ REEL_CACHE_DIR = BASE_DIR / "reel_cache"
 REEL_CACHE_MAX_BYTES = int(os.getenv("REEL_CACHE_MAX_MB", "512")) * 1024 * 1024
 REEL_MAX_CLIPS = max(1, int(os.getenv("REEL_MAX_CLIPS", "20")))
 REEL_CLIP_MAX_SEC = max(2, int(os.getenv("REEL_CLIP_MAX_SEC", "6")))
+
+# "On this day" automatic nostalgic throwbacks in active groups.
+THROWBACK_ENABLED = os.getenv("THROWBACK_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+THROWBACK_HOUR_UTC = max(0, min(23, int(os.getenv("THROWBACK_HOUR_UTC", "11"))))
+THROWBACK_CHECK_INTERVAL_SEC = max(60, int(os.getenv("THROWBACK_CHECK_INTERVAL_SEC", "3600")))

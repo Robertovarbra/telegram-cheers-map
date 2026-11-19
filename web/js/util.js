@@ -44,6 +44,23 @@ export function extractTripIdFromStartParam(sp) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+export function extractDateFromStartParam(sp) {
+  if (!sp) return null;
+  var m = sp.match(/_d(\d{4})(\d{2})(\d{2})$/);
+  return m ? (m[1] + '-' + m[2] + '-' + m[3]) : null;
+}
+
+export const DEFAULT_REACTIONS = ['🍾', '🔥', '🤣', '❤️', '🤯', '👍'];
+
+export function showToast(msg) {
+  var el = document.getElementById('app-toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(function () { el.classList.add('hidden'); }, 2200);
+}
+
 // Convert a 2-letter ISO-3166 alpha-2 country code (e.g. "pt") to its regional indicator flag emoji.
 export function countryFlag(cc) {
   if (!cc || typeof cc !== 'string' || !/^[a-zA-Z]{2}$/.test(cc)) return '';

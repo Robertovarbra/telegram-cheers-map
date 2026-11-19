@@ -3,6 +3,7 @@
 // since ES module imports are read-only bindings.
 export const state = {
   chatId: null,
+  isAtlas: false,
   currentUserId: null,
   theme: 'light',
   map: null,
@@ -17,8 +18,11 @@ export const state = {
   videoMarkers: [],   // {video, lat, lng, fileId, pins} per rendered cluster marker on the map
   detailPins: null,   // pins shown in the open detail overlay (null when closed)
   trips: [],          // {id, name, created_at, closed_at, pin_count} from /api/pins-meta, newest first
+  atlasChats: [],     // {chat_id, title, pin_count, is_solo} in My Atlas mode
   selectedTripId: null,  // trip chip currently selected in the filter panel (null = all)
   initialTripId: null,   // optional deep-link trip id from startapp=c<chat>_t<trip>
+  initialDate: null,     // optional deep-link YYYY-MM-DD from startapp=c<chat>_d<YYYYMMDD>
+  relocatingPin: null,   // pin currently being repositioned on the map (null when idle)
   entitlements: { has_group_pass: false, group_pass_expires_at: null, unlocked_trip_ids: [] },
   pricing: { reel_stars: 100, group_pass_stars: 250, group_pass_days: 30 },
 };
