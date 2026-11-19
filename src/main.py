@@ -11,6 +11,7 @@ from telegram.ext import (
     ChatMemberHandler,
     CommandHandler,
     MessageHandler,
+    MessageReactionHandler,
     PreCheckoutQueryHandler,
     filters,
 )
@@ -25,6 +26,7 @@ from telegram_handlers import (
     emoji_command,
     handle_emoji_text,
     handle_location,
+    handle_message_reaction,
     handle_my_chat_member,
     handle_pre_checkout_query,
     handle_pref_callback,
@@ -39,10 +41,12 @@ from telegram_handlers import (
 from web_handlers import (
     handle_bot_info,
     handle_chat,
+    handle_delete_comment,
     handle_delete_pin,
     handle_entitlements,
     handle_health,
     handle_pin_caption,
+    handle_pin_comment,
     handle_pin_location,
     handle_pin_reaction,
     handle_pin_trip,
@@ -130,6 +134,8 @@ async def main() -> None:
     web_app.router.add_post("/api/pin-reaction", handle_pin_reaction)
     web_app.router.add_post("/api/pin-caption", handle_pin_caption)
     web_app.router.add_post("/api/pin-location", handle_pin_location)
+    web_app.router.add_post("/api/pin-comment", handle_pin_comment)
+    web_app.router.add_post("/api/delete-comment", handle_delete_comment)
     web_app.router.add_post("/api/delete-pin", handle_delete_pin)
     web_app.router.add_get("/api/bot-info", handle_bot_info)
 
@@ -172,8 +178,9 @@ async def main() -> None:
     application.add_handler(PreCheckoutQueryHandler(handle_pre_checkout_query))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, handle_successful_payment))
     application.add_handler(MessageHandler(filters.TEXT, handle_emoji_text))
-    application.add_handler(MessageHandler(filters.VIDEO_NOTE, handle_video))
-    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_handler(MessageHandler(filters.VIDEO_NOTE & ~filters.UpdateType.EDITED_MESSAGE, handle_video))
+    application.add_handler(MessageHandler(filters.LOCATION & ~filters.UpdateType.EDITED_MESSAGE, handle_location))
+    application.add_handler(MessageReactionHandler(handle_message_reaction))
     application.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
     try:

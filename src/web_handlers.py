@@ -7,7 +7,7 @@ from pathlib import Path
 
 from aiohttp import ClientSession as AiohttpClient
 from aiohttp import ClientTimeout, web
-from telegram import LabeledPrice
+from telegram import LabeledPrice, ReactionTypeEmoji
 
 from auth import extract_init_data, is_member, verify_init_data
 from config import (
@@ -20,10 +20,12 @@ from config import (
     logger,
 )
 from database import (
-    ALLOWED_REACTIONS,
     MAX_CAPTION_LEN,
+    MAX_COMMENT_LEN,
     add_pin,
+    add_pin_comment,
     delete_pin,
+    delete_pin_comment,
     get_atlas_meta,
     get_atlas_pins,
     get_atlas_stats,
@@ -31,6 +33,7 @@ from database import (
     get_chat_ids_for_file,
     get_chat_stats,
     get_open_trip_for_member,
+    get_pin_message_ref,
     get_pin_owner,
     get_pins,
     get_pins_meta,
@@ -38,9 +41,11 @@ from database import (
     get_trip_pins_for_reel,
     is_file_owner,
     is_trip_reel_unlocked,
+    normalize_reaction_emoji,
     pop_pending_pin,
     set_chat_title,
     set_pins_trip,
+    to_telegram_reaction_emoji,
     toggle_pin_reaction,
     track,
     update_pin_caption,
@@ -606,8 +611,32 @@ async def handle_delete_pin(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "pin_id": pin_id, "trip_id": info["trip_id"]})
 
 
+async def _mirror_reaction_to_telegram(bot, chat_id: int, pin_id: int, added: bool, emoji: str, reactions: list[dict]) -> None:
+    """Best-effort mirror of Mini App reactions onto the original Telegram video note message.
+
+    Telegram Bot API lets a bot place 1 reaction (under the bot's own account) per message. We
+    reflect the just-added emoji (or top remaining supported emoji), or clear it if none remain."""
+    if not bot:
+        return
+    message_id = get_pin_message_ref(chat_id, pin_id)
+    if not message_id:
+        return
+    tg_emoji = to_telegram_reaction_emoji(emoji) if added else None
+    if tg_emoji is None:
+        for item in reactions:
+            cand = to_telegram_reaction_emoji(item.get("emoji"))
+            if cand:
+                tg_emoji = cand
+                break
+    try:
+        payload = [ReactionTypeEmoji(emoji=tg_emoji)] if tg_emoji else []
+        await bot.set_message_reaction(chat_id=chat_id, message_id=message_id, reaction=payload)
+    except Exception:
+        logger.debug("Could not mirror reaction to Telegram chat=%s msg=%s", chat_id, message_id, exc_info=True)
+
+
 async def handle_pin_reaction(request: web.Request) -> web.Response:
-    """Toggle a curated emoji reaction on a pin in an authorized chat."""
+    """Toggle an emoji reaction on a pin in an authorized chat and mirror it to Telegram."""
     chat_id_raw = request.rel_url.query.get("chat_id")
     if not chat_id_raw:
         return web.json_response({"error": "chat_id required"}, status=400)
@@ -626,8 +655,8 @@ async def handle_pin_reaction(request: web.Request) -> web.Response:
         if isinstance(raw_id, bool):
             raise TypeError
         pin_id = int(raw_id)
-        emoji = body.get("emoji")
-        if not isinstance(emoji, str) or emoji not in ALLOWED_REACTIONS:
+        emoji = normalize_reaction_emoji(body.get("emoji"))
+        if not emoji:
             raise ValueError("invalid emoji")
     except (ValueError, TypeError, KeyError):
         return web.json_response({"error": "invalid request"}, status=400)
@@ -636,9 +665,99 @@ async def handle_pin_reaction(request: web.Request) -> web.Response:
     if status == "not_found":
         return web.json_response({"error": "not found"}, status=404)
 
+    await _mirror_reaction_to_telegram(request.app.get("bot"), chat_id, pin_id, added, emoji, reactions)
+
     if added:
         track("pin_reacted", chat_id=chat_id, user_id=user_id)
     return web.json_response({"ok": True, "added": added, "reactions": reactions})
+
+
+async def handle_pin_comment(request: web.Request) -> web.Response:
+    """Add a reply/comment to a pin from the Mini App (and mirror quietly to Telegram in groups)."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+    u = data["user"]
+    user_id = int(u["id"])
+    full_name = " ".join(p for p in (u.get("first_name"), u.get("last_name")) if p).strip()
+    user_name = full_name or u.get("username") or str(user_id)
+
+    try:
+        body = await request.json()
+        raw_id = body["pin_id"]
+        if isinstance(raw_id, bool):
+            raise TypeError
+        pin_id = int(raw_id)
+        raw_text = body.get("text")
+        if not isinstance(raw_text, str):
+            raise TypeError
+        text = " ".join(raw_text.split())
+        if not text:
+            return web.json_response({"error": "empty reply"}, status=400)
+        if len(text) > MAX_COMMENT_LEN:
+            return web.json_response({"error": f"reply too long (max {MAX_COMMENT_LEN})"}, status=400)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    comment = add_pin_comment(chat_id, pin_id, user_id, user_name, text)
+    if not comment:
+        return web.json_response({"error": "not found"}, status=404)
+
+    # Best-effort silent reply in the Telegram group so conversations stay unified across both surfaces.
+    bot = request.app.get("bot")
+    if bot and chat_id < 0:
+        orig_msg_id = get_pin_message_ref(chat_id, pin_id)
+        if orig_msg_id:
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"💬 {user_name}: {text}",
+                    reply_to_message_id=orig_msg_id,
+                    disable_notification=True,
+                )
+            except Exception:
+                logger.debug("Could not mirror comment to Telegram chat=%s msg=%s", chat_id, orig_msg_id, exc_info=True)
+
+    track("pin_commented", chat_id=chat_id, user_id=user_id)
+    return web.json_response({"ok": True, "comment": comment})
+
+
+async def handle_delete_comment(request: web.Request) -> web.Response:
+    """Delete a comment owned by the authenticated caller."""
+    chat_id_raw = request.rel_url.query.get("chat_id")
+    if not chat_id_raw:
+        return web.json_response({"error": "chat_id required"}, status=400)
+    if not chat_id_raw.lstrip("-").isdigit():
+        return web.json_response({"error": "invalid chat_id"}, status=400)
+    chat_id = int(chat_id_raw)
+
+    data, err = await _authorize(request, chat_id)
+    if err:
+        return err
+    user_id = int(data["user"]["id"])
+
+    try:
+        body = await request.json()
+        raw_id = body["comment_id"]
+        if isinstance(raw_id, bool):
+            raise TypeError
+        comment_id = int(raw_id)
+    except (ValueError, TypeError, KeyError):
+        return web.json_response({"error": "invalid request"}, status=400)
+
+    status, _ = delete_pin_comment(chat_id, comment_id, user_id)
+    if status == "not_found":
+        return web.json_response({"error": "not found"}, status=404)
+    if status == "forbidden":
+        return web.json_response({"error": "forbidden"}, status=403)
+    return web.json_response({"ok": True, "comment_id": comment_id})
 
 
 async def handle_pin_caption(request: web.Request) -> web.Response:

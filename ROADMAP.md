@@ -58,6 +58,7 @@ Keep core pinning, mapping, and basic trips **free forever** so groups adopt it 
 - [ ] **Read-only Shareable Trip Web Links (Group Pass perk):** Let groups share a trip map with non-Telegram friends/family on the web — include a subtle *"Want this for your friend group?"* waitlist CTA to directly measure demand for a standalone app
 - [ ] **Permanent Cloud Archive (Cloudflare R2 — Group Pass perk):** Back up group videos so memories survive if Telegram expires `file_id`s or messages are deleted
 - [ ] **Interactive Demo Map on `/start`:** Let first-time visitors tap into a sample trip map before adding the bot to a group
+- [ ] **Opt-in Public "Live Nearby Map" (Exploration):** Let users optionally mark a solo/group cheers as public (e.g. 24h ephemeral) so anyone can center on their current location and discover real unfiltered moments posted nearby — keeping private groups strictly private by default
 
 ### Step 6 — Scale Hardening & Stage 2 Gate
 - [ ] Replace public Nominatim reverse geocoding with an offline GeoNames dataset (instant lookups, no 1 req/s bottleneck or commercial ToS limit)

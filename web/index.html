@@ -149,7 +149,27 @@ html, body {
 }
 .map-fab:active { transform: scale(0.92); }
 .map-fab.active { background: var(--accent); color: #fff; border-color: transparent; }
+.map-fab.locating svg { animation: spin 1.1s linear infinite; }
 .map-fab svg { width: 20px; height: 20px; display: block; pointer-events: none; }
+
+/* Pulsing blue "You are here" dot on the map */
+.user-loc-marker { background: transparent; border: none; pointer-events: none; }
+.ul-dot {
+  position: absolute; top: 50%; left: 50%; width: 14px; height: 14px;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: #2f80ed; border: 2.5px solid #fff;
+  box-shadow: 0 2px 8px rgba(47, 128, 237, 0.6);
+}
+.ul-pulse {
+  position: absolute; top: 50%; left: 50%; width: 34px; height: 34px;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: rgba(47, 128, 237, 0.28);
+  animation: ul-ping 2s ease-out infinite;
+}
+@keyframes ul-ping {
+  0% { transform: translate(-50%, -50%) scale(0.45); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(1.35); opacity: 0; }
+}
 .fab-dot {
   position: absolute; top: 7px; right: 7px; width: 8px; height: 8px;
   border-radius: 50%; background: #ff3b30; border: 1.5px solid var(--surface);
@@ -294,26 +314,242 @@ html, body {
 #view-all:active { transform: scale(0.92); }
 #view-all svg { width: 22px; height: 22px; display: block; pointer-events: none; }
 
-/* Detail overlay: tap a marker -> enlarged video (with sound) + bottom sheet listing the cheers at that spot. */
+/* Detail overlay: tap a marker -> hero stage (author, video, caption, reactions) + tabbed bottom drawer. */
 #detail.hidden { display: none; }
 #detail { position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column; }
-#detail-backdrop { position: absolute; inset: 0; background: rgba(12,14,18,0.76); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
-#detail-close { position: absolute; top: 12px; right: 12px; z-index: 2; width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(0,0,0,0.52); color: #fff; font-size: 18px; line-height: 38px; text-align: center; cursor: pointer; padding: 0; }
-#detail-actions { position: absolute; top: 12px; left: 12px; z-index: 2; display: flex; align-items: center; gap: 8px; }
-.detail-action-btn { width: 38px; height: 38px; border-radius: 50%; border: none; background: rgba(0,0,0,0.52); color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; transition: transform 0.1s ease; }
-.detail-action-btn:active { transform: scale(0.92); }
-.detail-action-btn svg { width: 18px; height: 18px; display: block; pointer-events: none; }
-.detail-action-btn.hidden { display: none; }
-.detail-action-btn:disabled { opacity: 0.45; cursor: default; }
-#detail-stage { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 20px; }
-#detail-big { position: relative; width: min(68vw, 280px); height: min(68vw, 280px); border-radius: 50%; overflow: hidden; border: 3px solid #fff; box-shadow: 0 10px 34px rgba(0,0,0,0.6); background: #222; }
-#detail-big video { width: 100%; height: 100%; object-fit: cover; display: block; }
+#detail-backdrop {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 28%, rgba(22, 26, 36, 0.72), rgba(10, 12, 16, 0.88));
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+#detail-close {
+  position: absolute; top: 12px; right: 12px; z-index: 4;
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  color: #fff; font-size: 16px; line-height: 34px; text-align: center; cursor: pointer; padding: 0;
+}
+#detail-close:active { transform: scale(0.92); }
+
+/* Stage: showcases author/place/trip above the circular video, caption + frosted reactions below. */
+#detail-stage {
+  position: relative; z-index: 1; flex: 1 1 auto; min-height: 112px; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 14px 16px 12px;
+  transition: padding 0.22s ease;
+}
+#stage-head {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  max-width: 100%; padding: 0 42px; text-align: center;
+}
+#stage-author-row {
+  display: flex; align-items: baseline; justify-content: center; gap: 6px; max-width: 100%;
+}
+#stage-author {
+  font-size: 16px; font-weight: 700; color: #fff; letter-spacing: -0.2px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#stage-time {
+  font-size: 12.5px; font-weight: 500; color: rgba(255, 255, 255, 0.68);
+  white-space: nowrap; flex-shrink: 0;
+}
+#stage-sub-row {
+  display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap; max-width: 100%;
+}
+#stage-sub-row:empty { display: none; }
+.stage-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 500; color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.11); border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  max-width: 72vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stage-chip.trip {
+  background: rgba(51, 144, 236, 0.26); border-color: rgba(110, 184, 255, 0.44);
+  color: #dff0ff; font-weight: 600; cursor: pointer;
+}
+.stage-chip.trip:active { transform: scale(0.95); }
+.stage-chip.hidden { display: none; }
+
+#detail-big-wrap {
+  position: relative; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+#detail-big {
+  position: relative;
+  width: clamp(118px, min(48vw, 25vh), 206px);
+  height: clamp(118px, min(48vw, 25vh), 206px);
+  border-radius: 50%; overflow: hidden; border: 2.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.56); background: #181a1f; cursor: pointer;
+  transition: width 0.22s ease, height 0.22s ease;
+}
+#detail-big video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.vid-ring {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  transform: rotate(-90deg); pointer-events: none; z-index: 2;
+}
+.vid-ring-track { fill: none; stroke: rgba(255, 255, 255, 0.22); stroke-width: 3; }
+.vid-ring-prog {
+  fill: none; stroke: #ffffff; stroke-width: 3; stroke-linecap: round;
+  stroke-dasharray: 304.73; stroke-dashoffset: 304.73;
+  transition: stroke-dashoffset 0.12s linear;
+}
+.vid-pause-badge {
+  position: absolute; inset: 0; z-index: 3;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.28); pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.vid-pause-badge.hidden { opacity: 0; }
+.vid-pause-circle {
+  width: 50px; height: 50px; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.56); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  color: #fff; font-size: 19px; display: flex; align-items: center; justify-content: center;
+  padding-left: 3px; border: 1.5px solid rgba(255, 255, 255, 0.35);
+}
+#detail.expanded .vid-pause-circle { width: 30px; height: 30px; font-size: 12px; padding-left: 2px; }
+#detail-mute {
+  position: absolute; right: 2px; bottom: 2px; z-index: 4;
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.45); background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; transition: transform 0.1s ease, width 0.2s ease, height 0.2s ease;
+}
+#detail-mute:active { transform: scale(0.9); }
+#detail-mute svg { width: 15px; height: 15px; display: block; pointer-events: none; }
+#detail.expanded #detail-mute { width: 24px; height: 24px; right: -2px; bottom: -2px; }
+#detail.expanded #detail-mute svg { width: 12px; height: 12px; }
+
+#stage-foot {
+  display: flex; flex-direction: column; align-items: center; gap: 9px;
+  width: 100%; max-width: 100%; min-width: 0;
+}
+#dm-caption-view {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  max-width: 88vw; min-height: 20px;
+}
+#dm-caption-view.hidden { display: none; }
+#dm-caption-text {
+  font-size: 13.5px; color: rgba(255, 255, 255, 0.94); font-weight: 500;
+  text-align: center; line-height: 1.38; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+#dm-caption-text.hidden { display: none; }
+#dm-caption-btn {
+  border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  color: rgba(255, 255, 255, 0.86); border-radius: 999px;
+  padding: 3px 9px; font-size: 11.5px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+}
+#dm-caption-btn.is-add { padding: 4px 12px; }
+#dm-caption-btn:active { transform: scale(0.94); }
+#dm-caption-btn.hidden { display: none; }
+#dm-caption-edit {
+  display: flex; align-items: center; gap: 6px; width: min(92vw, 360px); max-width: 100%;
+}
+#dm-caption-edit.hidden { display: none; }
+#dm-caption-input {
+  flex: 1; min-width: 0; min-height: 36px; font-size: 14px;
+  border: 1.5px solid var(--accent); border-radius: 999px; padding: 6px 13px;
+  background: rgba(18, 22, 30, 0.88); color: #fff;
+}
+#dm-caption-input::placeholder { color: rgba(255, 255, 255, 0.5); }
+#dm-caption-input:focus { outline: none; }
+#dm-caption-cancel, #dm-caption-save {
+  min-height: 36px; border-radius: 999px; padding: 0 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+}
+#dm-caption-cancel { border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.9); }
+#dm-caption-save { border: none; background: var(--accent); color: #fff; }
+#dm-caption-save:disabled { opacity: 0.5; cursor: default; }
+
+#dm-reactions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow-x: auto;
+  max-width: 100%; padding: 2px 4px; scrollbar-width: none; justify-content: safe center;
+}
+#dm-reactions::-webkit-scrollbar { display: none; }
+#dm-reactions.hidden { display: none; }
+.rx-pill {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 36px; padding: 5px 11px; border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.11);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  color: #fff; font-size: 14px; cursor: pointer; user-select: none; flex-shrink: 0;
+  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.rx-pill:active { transform: scale(0.92); }
+.rx-pill.active {
+  background: rgba(51, 144, 236, 0.36); border-color: rgba(120, 192, 255, 0.88);
+  color: #fff; box-shadow: 0 2px 10px rgba(51, 144, 236, 0.28);
+}
+.rx-em { font-size: 16px; line-height: 1; }
+.rx-cnt { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rx-cnt.hidden { display: none; }
+
+/* Bottom drawer: anchored cleanly to the bottom, dedicated to the tabbed Videos / Replies body. */
 #detail-sheet {
   position: relative; z-index: 1; flex: 0 0 auto;
+  display: flex; flex-direction: column; overflow: hidden; isolation: isolate;
   background: var(--surface); color: var(--text);
-  border-radius: 20px 20px 0 0; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain;
-  box-shadow: 0 -6px 24px rgba(0,0,0,0.32); padding: 0 0 calc(14px + env(safe-area-inset-bottom));
+  border-radius: 22px 22px 0 0; height: 44vh; max-height: 44vh;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.36);
+  transition: max-height 0.24s cubic-bezier(0.22, 1, 0.36, 1), height 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 }
+#detail-body {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+#detail-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 0 calc(18px + env(safe-area-inset-bottom));
+}
+#detail-list[hidden], #dm-comments[hidden] { display: none !important; }
+
+/* Expanded drawer mode: morphs stage into a sleek horizontal mini-player bar while drawer fills the screen. */
+#detail.expanded #detail-stage {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center; align-content: center;
+  column-gap: 12px; row-gap: 6px;
+  padding: 12px 56px 12px 16px;
+  min-height: 112px;
+}
+#detail.expanded #detail-big-wrap { grid-column: 1; grid-row: 1 / 3; }
+#detail.expanded #detail-big { width: 76px; height: 76px; border-width: 2px; }
+#detail.expanded #stage-head {
+  grid-column: 2; grid-row: 1; align-items: flex-start; text-align: left; padding: 0; gap: 3px;
+}
+#detail.expanded #stage-author-row { justify-content: flex-start; }
+#detail.expanded #stage-author { font-size: 14.5px; }
+#detail.expanded #stage-sub-row { justify-content: flex-start; flex-wrap: nowrap; overflow: hidden; }
+#detail.expanded .stage-chip { padding: 2px 8px; font-size: 11px; max-width: 100%; }
+#detail.expanded #stage-foot {
+  grid-column: 2; grid-row: 2; align-items: flex-start; gap: 0;
+}
+#detail.expanded #dm-caption-view { display: none; }
+#detail.expanded #dm-reactions { justify-content: flex-start; padding: 0; gap: 5px; }
+#detail.expanded .rx-pill { min-height: 30px; padding: 3px 9px; font-size: 13px; }
+#detail.expanded .rx-em { font-size: 14px; }
+#detail.expanded .rx-cnt { font-size: 11px; }
+#detail.expanded #detail-sheet { height: calc(100vh - 116px); max-height: calc(100vh - 116px); }
+
+/* Disable CSS transitions while the user's finger is actively pulling the drawer. */
+#detail.dragging #detail-sheet,
+#detail.dragging #detail-big,
+#detail.dragging #detail-stage { transition: none !important; }
+
+#detail-handle {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; padding: 10px 0 6px; border: none; background: transparent;
+  cursor: grab; touch-action: none;
+}
+#detail-handle:active { cursor: grabbing; }
+#detail-handle-pill {
+  display: block; width: 42px; height: 4.5px; border-radius: 999px;
+  background: var(--text-muted); opacity: 0.34;
+}
+
 .detail-row { display: flex; align-items: center; gap: 12px; padding: 9px 18px; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .detail-row.active { background: var(--row-active); }
 .detail-row.selected { background: var(--row-selected); }
@@ -335,61 +571,99 @@ html, body {
 .dr-caption { font-size: 12px; color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .dr-caption:empty { display: none; }
 
-/* Pin metadata, lightweight caption editor & quick emoji reactions */
-#detail-meta { padding: 0 14px 10px; display: flex; flex-direction: column; gap: 7px; background: var(--surface); }
-#detail-meta.hidden { display: none; }
-#dm-info { font-size: 12px; color: var(--text-muted); text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#dm-info.hidden { display: none; }
-#dm-caption-view { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 24px; }
-#dm-caption-view.hidden { display: none; }
-#dm-caption-text { font-size: 13px; color: var(--text); font-weight: 500; text-align: center; line-height: 1.35; word-break: break-word; }
-#dm-caption-text.hidden { display: none; }
-#dm-caption-btn {
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted);
-  border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+/* Owner overflow menu (lives cleanly inside the drawer header when '...' is tapped) */
+#detail-owner-menu {
+  display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+  padding: 2px 16px 12px; background: var(--surface);
 }
-#dm-caption-btn.is-add { color: var(--accent-text); background: var(--accent-soft); border-color: transparent; padding: 4px 11px; }
-#dm-caption-btn.hidden { display: none; }
-#dm-caption-edit { display: flex; align-items: center; gap: 6px; }
-#dm-caption-edit.hidden { display: none; }
-#dm-caption-input {
-  flex: 1; min-width: 0; min-height: 36px; font-size: 14px;
-  border: 1px solid var(--accent); border-radius: 10px; padding: 6px 10px;
+#detail-owner-menu.hidden { display: none; }
+.owner-menu-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 7px 14px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.owner-menu-btn:active { transform: scale(0.95); }
+.owner-menu-btn:disabled { opacity: 0.45; cursor: default; }
+.owner-menu-btn.danger { background: rgba(255, 69, 58, 0.13); border-color: rgba(255, 69, 58, 0.3); color: #ff453a; }
+
+/* Replies tab panel: full-height scrollable thread + bottom-pinned composer */
+#dm-comments {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+#dm-comments-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 16px;
+}
+.cm-empty {
+  margin: auto; text-align: center; padding: 24px 16px;
+  color: var(--text-muted); font-size: 13px; line-height: 1.45; max-width: 260px;
+}
+.cm-empty-icon { font-size: 26px; margin-bottom: 6px; opacity: 0.75; }
+.cm-item {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 9px 12px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border);
+}
+.cm-body { flex: 1; min-width: 0; }
+.cm-author { font-size: 12.5px; font-weight: 700; color: var(--text); margin-right: 6px; }
+.cm-time { font-size: 11px; color: var(--text-muted); }
+.cm-text { font-size: 13.5px; color: var(--text); line-height: 1.38; margin-top: 3px; word-break: break-word; }
+.cm-del {
+  border: none; background: transparent; color: var(--text-muted);
+  font-size: 12px; width: 26px; height: 26px; border-radius: 50%;
+  cursor: pointer; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+}
+#dm-comment-form {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+#dm-comment-input {
+  flex: 1; min-width: 0; min-height: 38px; font-size: 14px;
+  border: 1px solid var(--border); border-radius: 999px; padding: 7px 14px;
   background: var(--surface-2); color: var(--text);
 }
-#dm-caption-cancel, #dm-caption-save {
-  min-height: 36px; border-radius: 10px; padding: 0 12px; font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+#dm-comment-input:focus { outline: none; border-color: var(--accent); }
+#dm-comment-send {
+  min-height: 38px; padding: 0 15px; border-radius: 999px; border: none;
+  background: var(--accent); color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; flex-shrink: 0;
 }
-#dm-caption-cancel { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted); }
-#dm-caption-save { border: none; background: var(--accent); color: #fff; }
-#dm-caption-save:disabled { opacity: 0.5; cursor: default; }
-#dm-reactions { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: nowrap; overflow-x: auto; padding: 2px 0; }
-.rx-pill {
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  min-height: 34px; padding: 5px 10px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
-  font-size: 14px; cursor: pointer; user-select: none; flex-shrink: 0;
-  transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
+#dm-comment-send:disabled { opacity: 0.45; cursor: default; }
+
+#detail-header { position: relative; flex-shrink: 0; z-index: 2; background: var(--surface); box-shadow: 0 1px 0 var(--border); touch-action: none; }
+#detail-controls {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 46px; padding: 4px 14px 12px; background: var(--surface);
 }
-.rx-pill:active { transform: scale(0.92); }
-.rx-pill.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
-.rx-em { font-size: 15px; line-height: 1; }
-.rx-cnt { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.rx-cnt.hidden { display: none; }
-#detail-header { position: sticky; top: 0; z-index: 2; background: var(--surface); box-shadow: 0 1px 0 var(--border); }
-#detail-controls { position: relative; display: flex; align-items: center; justify-content: center; padding: 20px 14px 12px; background: var(--surface); }
 #detail-controls.hidden { display: none; }
-.detail-count-wrap { display: flex; align-items: center; justify-content: center; gap: 10px; }
-.detail-line { display: block; width: 24px; height: 1px; background: var(--border); flex-shrink: 0; }
-.detail-count { font-size: 13px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-#detail-trip-bar { padding: 0 14px 8px; background: var(--surface); }
+#detail-tabs {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 3px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.detail-tab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 6px 12px; border-radius: 999px; border: 1px solid transparent;
+  background: transparent; color: var(--text-muted);
+  font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+.detail-tab[aria-selected="true"] {
+  background: var(--surface); color: var(--text); border-color: var(--border);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+}
+.tab-cnt {
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--text-muted); padding: 1px 5px; border-radius: 999px;
+}
+.tab-cnt:empty { display: none; }
+#tab-replies.has-replies .tab-cnt { background: var(--accent-soft); color: var(--accent-text); }
+#tab-replies[aria-selected="true"].has-replies .tab-cnt { background: var(--accent); color: #fff; }
+
+#detail-trip-bar { padding: 0 16px 12px; background: var(--surface); }
 #detail-trip-bar.hidden { display: none; }
-#dtb-view { display: flex; align-items: center; justify-content: center; gap: 8px; }
-#dtb-view.hidden { display: none; }
-.trip-pill { font-size: 12px; font-weight: 600; color: var(--accent-text); background: var(--accent-soft); border-radius: 999px; padding: 4px 12px; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trip-pill.empty { color: var(--text-muted); background: var(--surface-2); font-weight: 500; }
-.dtb-hint { font-size: 11px; color: var(--text-muted); }
-#dtb-edit { display: flex; flex-direction: column; gap: 9px; padding-top: 14px; }
+#dtb-edit { display: flex; flex-direction: column; gap: 9px; padding-top: 6px; }
 #dtb-edit.hidden { display: none; }
 .dtb-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 #dtb-count { font-size: 13px; font-weight: 600; color: var(--text); }
@@ -401,10 +675,12 @@ html, body {
 #dtb-targets { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
 .tt-chip { font-size: 13px; color: var(--text); background: var(--surface-2); border-radius: 14px; padding: 7px 14px; cursor: pointer; white-space: nowrap; user-select: none; flex-shrink: 0; }
 .tt-chip.active { background: var(--accent); color: #fff; }
-.dm-btn { position: absolute; right: 14px; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: var(--surface-2); color: var(--text-muted); cursor: pointer; padding: 0; }
-.dm-btn svg { width: 18px; height: 18px; display: block; }
-.dm-btn.active { background: #ff3b30; color: #fff; }
-#mode-reverse { left: 14px; right: auto; }
+.dm-right-btns { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.dm-btn { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: none; border-radius: 50%; background: var(--surface-2); color: var(--text-muted); cursor: pointer; padding: 0; flex-shrink: 0; }
+.dm-btn.hidden { display: none; }
+.dm-btn svg { width: 17px; height: 17px; display: block; }
+.dm-btn.active { background: var(--accent); color: #fff; }
+#mode-loop.active { background: #ff3b30; color: #fff; }
 
 /* Group Passport & Stats sheet */
 #stats-overlay.hidden { display: none; }
@@ -634,6 +910,9 @@ body.relocating #relocate-bar {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="18" x2="14" y2="18"/></svg>
     <span id="filter-active-dot" class="fab-dot hidden"></span>
   </button>
+  <button id="locate-me" class="map-fab" type="button" title="Center on my location" aria-label="Center on my location">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+  </button>
 </div>
 
 <button id="play-all" title="Play videos in view" aria-label="Play videos in view"><span class="pa-glyph">▶</span></button>
@@ -737,49 +1016,66 @@ body.relocating #relocate-bar {
 
 <div id="detail" class="hidden">
   <div id="detail-backdrop"></div>
-  <div id="detail-actions">
-    <button id="detail-delete" class="detail-action-btn hidden" type="button" title="Delete this cheers" aria-label="Delete this cheers">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-    </button>
-    <button id="detail-move" class="detail-action-btn hidden" type="button" title="Adjust pin location" aria-label="Adjust pin location">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
-    </button>
-  </div>
   <button id="detail-close" aria-label="Close">✕</button>
-  <div id="detail-stage"><div id="detail-big"></div></div>
+  <div id="detail-stage">
+    <div id="stage-head">
+      <div id="stage-author-row">
+        <span id="stage-author"></span>
+        <span id="stage-time"></span>
+      </div>
+      <div id="stage-sub-row">
+        <span id="dm-info" class="stage-chip hidden"></span>
+        <button id="stage-trip" type="button" class="stage-chip trip hidden"></button>
+      </div>
+    </div>
+    <div id="detail-big-wrap">
+      <div id="detail-big"></div>
+      <button id="detail-mute" type="button" title="Toggle sound" aria-label="Toggle sound" aria-pressed="false"></button>
+    </div>
+    <div id="stage-foot">
+      <div id="dm-caption-view" class="hidden">
+        <span id="dm-caption-text" class="hidden"></span>
+        <button id="dm-caption-btn" class="hidden" type="button">+ Caption</button>
+      </div>
+      <div id="dm-caption-edit" class="hidden">
+        <input id="dm-caption-input" type="text" maxlength="140" placeholder="Add a short caption or drink…">
+        <button id="dm-caption-cancel" type="button">Cancel</button>
+        <button id="dm-caption-save" type="button">Save</button>
+      </div>
+      <div id="dm-reactions" aria-label="Reactions"></div>
+    </div>
+  </div>
   <div id="detail-sheet">
     <div id="detail-header">
+      <button id="detail-handle" type="button" aria-label="Expand or collapse drawer" aria-expanded="false">
+        <span id="detail-handle-pill"></span>
+      </button>
       <div id="detail-controls">
         <button id="mode-reverse" class="dm-btn" type="button" title="Reverse order" aria-label="Reverse order" aria-pressed="false">
-           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
         </button>
-        <div id="detail-count-wrap" class="detail-count-wrap">
-          <span class="detail-line"></span>
-          <span id="detail-count" class="detail-count"></span>
-          <span class="detail-line"></span>
+        <div id="detail-tabs" role="tablist" aria-label="Drawer sections">
+          <button id="tab-videos" class="detail-tab" type="button" role="tab" aria-selected="true">
+            <span>Videos</span><span id="tab-videos-cnt" class="tab-cnt"></span>
+          </button>
+          <button id="tab-replies" class="detail-tab" type="button" role="tab" aria-selected="false">
+            <span>Replies</span><span id="tab-replies-cnt" class="tab-cnt"></span>
+          </button>
         </div>
-        <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
-        </button>
+        <div class="dm-right-btns">
+          <button id="mode-loop" class="dm-btn" type="button" title="Loop this clip" aria-label="Loop this clip" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+          </button>
+          <button id="detail-more" class="dm-btn hidden" type="button" title="More pin options" aria-label="More pin options" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+          </button>
+        </div>
       </div>
-      <div id="detail-meta" class="hidden">
-        <div id="dm-info" class="hidden"></div>
-        <div id="dm-caption-view" class="hidden">
-          <span id="dm-caption-text" class="hidden"></span>
-          <button id="dm-caption-btn" class="hidden" type="button">+ Add caption</button>
-        </div>
-        <div id="dm-caption-edit" class="hidden">
-          <input id="dm-caption-input" type="text" maxlength="140" placeholder="Add a short caption or drink…">
-          <button id="dm-caption-cancel" type="button">Cancel</button>
-          <button id="dm-caption-save" type="button">Save</button>
-        </div>
-        <div id="dm-reactions" aria-label="Reactions"></div>
+      <div id="detail-owner-menu" class="hidden">
+        <button id="detail-move" class="owner-menu-btn" type="button">📍 Move pin</button>
+        <button id="detail-delete" class="owner-menu-btn danger" type="button">🗑️ Delete</button>
       </div>
       <div id="detail-trip-bar" class="hidden">
-        <div id="dtb-view">
-          <span id="dtb-current" class="trip-pill empty">No trip</span>
-          <span class="dtb-hint">Hold a video to tag it</span>
-        </div>
         <div id="dtb-edit" class="hidden">
           <div class="dtb-head">
             <span id="dtb-count">0 selected</span>
@@ -792,7 +1088,16 @@ body.relocating #relocate-bar {
         </div>
       </div>
     </div>
-    <div id="detail-list"></div>
+    <div id="detail-body">
+      <div id="detail-list" role="tabpanel" aria-labelledby="tab-videos"></div>
+      <div id="dm-comments" role="tabpanel" aria-labelledby="tab-replies" hidden>
+        <div id="dm-comments-list"></div>
+        <form id="dm-comment-form" autocomplete="off">
+          <input id="dm-comment-input" type="text" maxlength="500" placeholder="Reply to this cheers…">
+          <button id="dm-comment-send" type="submit">Send</button>
+        </form>
+      </div>
+    </div>
   </div>
 </div>
 

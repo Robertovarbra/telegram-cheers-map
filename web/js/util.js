@@ -50,7 +50,7 @@ export function extractDateFromStartParam(sp) {
   return m ? (m[1] + '-' + m[2] + '-' + m[3]) : null;
 }
 
-export const ALLOWED_REACTIONS = ['🍻', '🔥', '😂', '❤️', '🤯', '🥂'];
+export const DEFAULT_REACTIONS = ['🍾', '🔥', '🤣', '❤️', '🤯', '👍'];
 
 export function showToast(msg) {
   var el = document.getElementById('app-toast');

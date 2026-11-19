@@ -3,12 +3,54 @@ import math
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from telegram.constants import ReactionEmoji
+
 from config import DB_PATH
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_REACTIONS = ("🍻", "🔥", "😂", "❤️", "🤯", "🥂")
+# Default 6 quick-pick reaction pills (all valid native Telegram reactions so two-way sync works cleanly).
+DEFAULT_REACTIONS = ("🍾", "🔥", "🤣", "❤️", "🤯", "👍")
+_LEGACY_REACTIONS = frozenset(("🍻", "😂", "🥂"))
+_TELEGRAM_REACTION_SET = frozenset(e.value for e in ReactionEmoji)
 MAX_CAPTION_LEN = 140
+MAX_COMMENT_LEN = 500
+
+
+def normalize_reaction_emoji(emoji: str | None) -> str | None:
+    """Validate and normalize a reaction emoji for consistent DB storage & UI display.
+
+    Accepts all standard Telegram ReactionEmoji values (normalizing Telegram's bare '❤' to '❤️'
+    for crisp cross-platform rendering) plus legacy in-app cheers emojis."""
+    if not isinstance(emoji, str):
+        return None
+    raw = emoji.strip()
+    if not raw or len(raw) > 16:
+        return None
+    if raw == "❤" or raw == "❤️":
+        return "❤️"
+    if raw in _TELEGRAM_REACTION_SET or raw in _LEGACY_REACTIONS:
+        return raw
+    stripped = raw.replace("\ufe0f", "")
+    if stripped in _TELEGRAM_REACTION_SET:
+        return raw
+    return None
+
+
+def to_telegram_reaction_emoji(emoji: str | None) -> str | None:
+    """Map a stored reaction emoji to a valid Telegram ReactionTypeEmoji string, or None if unsupported."""
+    if not emoji:
+        return None
+    if emoji == "❤️":
+        return "❤"
+    if emoji in _TELEGRAM_REACTION_SET:
+        return emoji
+    stripped = emoji.replace("\ufe0f", "")
+    if stripped in _TELEGRAM_REACTION_SET:
+        return stripped
+    # Best-effort fallback for legacy cheers-themed emojis so they still reflect in Telegram
+    fallback = {"🍻": "🍾", "🥂": "🍾", "😂": "🤣"}.get(emoji)
+    return fallback if fallback in _TELEGRAM_REACTION_SET else None
 
 
 def init_db():
@@ -207,6 +249,29 @@ def migrate_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_pin_reactions_pin ON pin_reactions(pin_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_pins_user_id ON pins(user_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pins_chat_msg ON pins(chat_id, message_id)")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS pin_comments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pin_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER,
+                user_id INTEGER NOT NULL,
+                user_name TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_pin_comments_pin ON pin_comments(pin_id)")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pin_comments_chat_msg ON pin_comments(chat_id, message_id) WHERE message_id IS NOT NULL")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS pin_message_aliases (
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                pin_id INTEGER NOT NULL,
+                PRIMARY KEY (chat_id, message_id)
+            )
+        """)
         conn.commit()
     finally:
         conn.close()
@@ -624,12 +689,35 @@ def _fetch_reactions_map(c, pin_ids, viewer_user_id=None):
         f" FROM pin_reactions WHERE pin_id IN ({placeholders}) GROUP BY pin_id, emoji",
         [vid, *pin_ids],
     )
-    order = {e: i for i, e in enumerate(ALLOWED_REACTIONS)}
+    order = {e: i for i, e in enumerate(DEFAULT_REACTIONS)}
     by_pin: dict[int, list[dict]] = {}
     for pid, emoji, cnt, me in c.fetchall():
         by_pin.setdefault(pid, []).append({"emoji": emoji, "count": cnt, "me": bool(me)})
     for items in by_pin.values():
-        items.sort(key=lambda x: order.get(x["emoji"], 99))
+        items.sort(key=lambda x: (-x["count"], order.get(x["emoji"], 99), x["emoji"]))
+    return by_pin
+
+
+def _fetch_comments_map(c, pin_ids):
+    """Batch-fetch replies/comments for a list of pin IDs in chronological order (oldest -> newest)."""
+    if not pin_ids:
+        return {}
+    placeholders = ",".join("?" for _ in pin_ids)
+    c.execute(
+        f"SELECT id, pin_id, user_id, user_name, text, created_at FROM pin_comments WHERE pin_id IN ({placeholders}) ORDER BY created_at ASC, id ASC",
+        list(pin_ids),
+    )
+    by_pin: dict[int, list[dict]] = {}
+    for cid, pid, uid, uname, text, created_at in c.fetchall():
+        by_pin.setdefault(pid, []).append(
+            {
+                "id": cid,
+                "user_id": uid,
+                "user_name": uname,
+                "text": text,
+                "created_at": created_at,
+            }
+        )
     return by_pin
 
 
@@ -673,7 +761,9 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
             params + [limit, offset],
         )
         rows = c.fetchall()
-        rx_map = _fetch_reactions_map(c, [r[0] for r in rows], viewer_user_id=viewer_user_id)
+        pin_ids = [r[0] for r in rows]
+        rx_map = _fetch_reactions_map(c, pin_ids, viewer_user_id=viewer_user_id)
+        cm_map = _fetch_comments_map(c, pin_ids)
         return {
             "total": total,
             "limit": limit,
@@ -698,6 +788,7 @@ def get_pins(chat_id, limit=500, offset=0, user_ids=None, date_from=None, date_t
                     "chat_id": r[15],
                     "caption": r[16],
                     "reactions": rx_map.get(r[0], []),
+                    "comments": cm_map.get(r[0], []),
                 }
                 for r in rows
             ],
@@ -712,6 +803,8 @@ def delete_chat_pins(chat_id):
         c = conn.cursor()
         try:
             c.execute("DELETE FROM pin_reactions WHERE pin_id IN (SELECT id FROM pins WHERE chat_id = ?)", (chat_id,))
+            c.execute("DELETE FROM pin_comments WHERE chat_id = ?", (chat_id,))
+            c.execute("DELETE FROM pin_message_aliases WHERE chat_id = ?", (chat_id,))
         except Exception:
             pass
         c.execute("DELETE FROM pins WHERE chat_id = ?", (chat_id,))
@@ -794,6 +887,8 @@ def delete_pin(chat_id, pin_id, user_id):
             c.execute("COMMIT")
             return "forbidden", None
         c.execute("DELETE FROM pin_reactions WHERE pin_id = ?", (pin_id,))
+        c.execute("DELETE FROM pin_comments WHERE pin_id = ?", (pin_id,))
+        c.execute("DELETE FROM pin_message_aliases WHERE pin_id = ?", (pin_id,))
         c.execute("DELETE FROM pins WHERE id = ? AND chat_id = ? AND user_id = ?", (pin_id, chat_id, user_id))
         c.execute("COMMIT")
         return "ok", {"id": pin_id, "trip_id": trip_id, "video_file_id": video_file_id}
@@ -1164,7 +1259,9 @@ def get_atlas_pins(user_id, limit=500, offset=0, chat_ids=None, date_from=None, 
             params + [limit, offset],
         )
         rows = c.fetchall()
-        rx_map = _fetch_reactions_map(c, [r[0] for r in rows], viewer_user_id=user_id)
+        pin_ids = [r[0] for r in rows]
+        rx_map = _fetch_reactions_map(c, pin_ids, viewer_user_id=user_id)
+        cm_map = _fetch_comments_map(c, pin_ids)
         return {
             "total": total,
             "limit": limit,
@@ -1190,6 +1287,7 @@ def get_atlas_pins(user_id, limit=500, offset=0, chat_ids=None, date_from=None, 
                     "caption": r[16],
                     "chat_title": _format_atlas_chat_title(r[15], user_id, r[17]),
                     "reactions": rx_map.get(r[0], []),
+                    "comments": cm_map.get(r[0], []),
                 }
                 for r in rows
             ],
@@ -1319,9 +1417,10 @@ def get_atlas_stats(user_id):
 
 
 def toggle_pin_reaction(chat_id, pin_id, user_id, emoji):
-    """Toggle a reaction emoji on a pin belonging to `chat_id`.
+    """Set, switch, or clear a user's single reaction emoji on a pin (matching Telegram's 1-reaction UX).
 
-    Returns ("ok", added: bool, reactions: list) or ("not_found", False, [])."""
+    Tapping the same emoji removes it; tapping a different emoji replaces the user's previous
+    reaction on this pin. Returns ("ok", added: bool, reactions: list) or ("not_found", False, [])."""
     conn = sqlite3.connect(str(DB_PATH))
     try:
         conn.isolation_level = None
@@ -1337,6 +1436,7 @@ def toggle_pin_reaction(chat_id, pin_id, user_id, emoji):
             added = False
         else:
             now = datetime.now(timezone.utc).isoformat()
+            c.execute("DELETE FROM pin_reactions WHERE pin_id = ? AND user_id = ?", (pin_id, user_id))
             c.execute(
                 "INSERT INTO pin_reactions (pin_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)",
                 (pin_id, user_id, emoji, now),
@@ -1345,6 +1445,166 @@ def toggle_pin_reaction(chat_id, pin_id, user_id, emoji):
         reactions = _fetch_reactions_map(c, [pin_id], viewer_user_id=user_id).get(pin_id, [])
         c.execute("COMMIT")
         return "ok", added, reactions
+    finally:
+        conn.close()
+
+
+def register_pin_message_alias(chat_id, message_id, pin_id):
+    """Map an alternate Telegram message (e.g. a resent throwback video note) back to its original pin."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO pin_message_aliases (chat_id, message_id, pin_id) VALUES (?, ?, ?)",
+            (chat_id, message_id, pin_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _resolve_pin_id_for_message(c, chat_id, message_id):
+    c.execute("SELECT id FROM pins WHERE chat_id = ? AND message_id = ? LIMIT 1", (chat_id, message_id))
+    row = c.fetchone()
+    if row:
+        return row[0]
+    c.execute("SELECT pin_id FROM pin_message_aliases WHERE chat_id = ? AND message_id = ? LIMIT 1", (chat_id, message_id))
+    alias = c.fetchone()
+    return alias[0] if alias else None
+
+
+def get_pin_by_message(chat_id, message_id):
+    """Look up a pin by its Telegram (chat_id, message_id) — including throwback aliases — to sync reactions & replies."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        pin_id = _resolve_pin_id_for_message(c, chat_id, message_id)
+        if not pin_id:
+            return None
+        c.execute("SELECT id, chat_id, message_id, user_id FROM pins WHERE id = ? LIMIT 1", (pin_id,))
+        row = c.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "chat_id": row[1], "message_id": row[2], "user_id": row[3]}
+    finally:
+        conn.close()
+
+
+def get_pin_message_ref(chat_id, pin_id):
+    """Return the original Telegram message_id for a pin in `chat_id`, or None if not found."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("SELECT message_id FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        row = c.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def sync_telegram_reactions(chat_id, message_id, user_id, added_emojis, removed_emojis):
+    """Apply a user's Telegram reaction delta on a video note directly to `pin_reactions`.
+
+    Returns the pin_id if a matching pin was updated, else None."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        pin_id = _resolve_pin_id_for_message(c, chat_id, message_id)
+        if not pin_id:
+            c.execute("COMMIT")
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        for em in removed_emojis:
+            c.execute("DELETE FROM pin_reactions WHERE pin_id = ? AND user_id = ? AND emoji = ?", (pin_id, user_id, em))
+        for em in added_emojis:
+            c.execute(
+                "INSERT OR IGNORE INTO pin_reactions (pin_id, user_id, emoji, created_at) VALUES (?, ?, ?, ?)",
+                (pin_id, user_id, em, now),
+            )
+        c.execute("COMMIT")
+        return pin_id
+    finally:
+        conn.close()
+
+
+def add_pin_comment(chat_id, pin_id, user_id, user_name, text, message_id=None):
+    """Add a reply/comment to a pin in `chat_id`. Returns comment dict on success, or None if pin doesn't exist."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT 1 FROM pins WHERE id = ? AND chat_id = ?", (pin_id, chat_id))
+        if not c.fetchone():
+            c.execute("COMMIT")
+            return None
+        now = datetime.now(timezone.utc).isoformat()
+        if message_id is not None:
+            c.execute(
+                "SELECT id, user_id, user_name, text, created_at FROM pin_comments WHERE chat_id = ? AND message_id = ?",
+                (chat_id, message_id),
+            )
+            existing = c.fetchone()
+            if existing:
+                c.execute("COMMIT")
+                return {
+                    "id": existing[0],
+                    "user_id": existing[1],
+                    "user_name": existing[2],
+                    "text": existing[3],
+                    "created_at": existing[4],
+                }
+        c.execute(
+            "INSERT INTO pin_comments (pin_id, chat_id, message_id, user_id, user_name, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (pin_id, chat_id, message_id, user_id, user_name, text, now),
+        )
+        cid = c.lastrowid
+        c.execute("COMMIT")
+        return {
+            "id": cid,
+            "user_id": user_id,
+            "user_name": user_name,
+            "text": text,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def update_pin_comment_by_message(chat_id, message_id, text):
+    """Keep an already-captured Telegram reply in sync if the user edits their message."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE pin_comments SET text = ? WHERE chat_id = ? AND message_id = ?", (text, chat_id, message_id))
+        conn.commit()
+        return c.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_pin_comment(chat_id, comment_id, user_id):
+    """Delete a comment iff it belongs to `chat_id` and `user_id` (owner-only).
+
+    Returns ('ok', message_id), ('not_found', None), or ('forbidden', None)."""
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("SELECT user_id, message_id FROM pin_comments WHERE id = ? AND chat_id = ?", (comment_id, chat_id))
+        row = c.fetchone()
+        if not row:
+            c.execute("COMMIT")
+            return "not_found", None
+        owner_id, msg_id = row
+        if owner_id != user_id:
+            c.execute("COMMIT")
+            return "forbidden", None
+        c.execute("DELETE FROM pin_comments WHERE id = ? AND chat_id = ? AND user_id = ?", (comment_id, chat_id, user_id))
+        c.execute("COMMIT")
+        return "ok", msg_id
     finally:
         conn.close()
 

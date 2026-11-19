@@ -2,14 +2,16 @@ import asyncio
 from datetime import datetime, timezone
 
 from aiohttp import ClientSession
-from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, ReactionTypeEmoji, Update
 from telegram.error import BadRequest, Forbidden
 from telegram.ext import ContextTypes
 
 from auth import is_member
 from config import ADMIN_USER_IDS, BOT_USERNAME, GROUP_PASS_DAYS, GROUP_PASS_STARS, REEL_PRICE_STARS, THROWBACK_HOUR_UTC, logger
 from database import (
+    MAX_COMMENT_LEN,
     add_pin,
+    add_pin_comment,
     close_trip,
     create_trip,
     delete_chat_pins,
@@ -24,6 +26,7 @@ from database import (
     get_open_trip_for_member,
     get_open_trips,
     get_pin,
+    get_pin_by_message,
     get_pins_meta,
     get_random_throwback_pin,
     get_trip,
@@ -31,16 +34,20 @@ from database import (
     get_trip_pins_for_reel,
     is_trip_reel_unlocked,
     mark_throwback_sent,
+    normalize_reaction_emoji,
     pop_pending_pin,
     record_payment_and_grant,
+    register_pin_message_alias,
     set_chat_setting,
     set_chat_throwbacks_enabled,
     set_chat_title,
     set_pending_pin,
     set_trip_checklist_msg,
     set_user_pref,
+    sync_telegram_reactions,
     toggle_trip_member,
     track,
+    update_pin_comment_by_message,
 )
 
 
@@ -143,6 +150,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     atlas_open = ev.get("atlas_opened", 0)
     stats_open = ev.get("stats_opened", 0)
     reacted = ev.get("pin_reacted", 0)
+    commented = ev.get("pin_commented", 0)
     captioned = ev.get("pin_captioned", 0)
     relocated = ev.get("pin_relocated", 0)
     throwbacks = ev.get("throwback_sent", 0)
@@ -162,7 +170,7 @@ async def admin_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• Active: {s['active_chats']} chats, {s['active_users']} users",
         f"• Installs: +{added} / -{removed} (net {added - removed:+d})",
         f"• Pin funnel: {started} started → {created} created ({conv})",
-        f"• Pin actions: {reacted} reactions · {captioned} captions · {relocated} moves · {deleted} deletes",
+        f"• Pin actions: {reacted} reactions · {commented} replies · {captioned} captions · {relocated} moves · {deleted} deletes",
         f"• Maps: {map_cmd} /map cmds → {map_open} group · {atlas_open} atlas · {stats_open} passport",
         f"• Throwbacks: {throwbacks} sent",
         f"• Reels: {reel_prev} preview · {reel_hd} HD · ⭐ {s['stars_window']} Stars ({s['payments_window']} paid)",
@@ -266,16 +274,29 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Keep already-captured Telegram replies to pinned video notes in sync if the user edits them.
+    if update.edited_message is not None:
+        emsg = update.edited_message
+        if emsg.text and emsg.reply_to_message and emsg.from_user and not emsg.from_user.is_bot:
+            cleaned = " ".join(emsg.text.split())
+            if cleaned and not cleaned.startswith("/"):
+                update_pin_comment_by_message(emsg.chat_id, emsg.message_id, cleaned[:MAX_COMMENT_LEN])
+        return
+
+    msg = update.message
+    if not msg or not msg.text:
+        return
+
     # Trip-name capture (from the /trip -> Start button) takes precedence over the emoji flow.
     # user_data is per-user across ALL chats, so only consume it when the reply comes from the same
     # chat where Start was pressed — otherwise an unrelated message elsewhere (even a DM to the bot)
     # would be turned into a trip name in the original group.
     pending_trip = context.user_data.get("awaiting_trip_name")
-    if pending_trip and update.message.chat_id == pending_trip["chat_id"]:
+    if pending_trip and msg.chat_id == pending_trip["chat_id"]:
         context.user_data.pop("awaiting_trip_name", None)
-        name = update.message.text.strip()
+        name = msg.text.strip()
         if not name.startswith("/"):  # a command, not a name — cancel quietly
-            await _start_trip(context, pending_trip["chat_id"], update.message.from_user, name)
+            await _start_trip(context, pending_trip["chat_id"], msg.from_user, name)
             if pending_trip.get("prompt_id"):  # tidy up the "send the trip name" prompt
                 try:
                     await context.bot.delete_message(pending_trip["chat_id"], pending_trip["prompt_id"])
@@ -285,25 +306,35 @@ async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     pending = context.user_data.pop("awaiting_emoji", None)
     if not pending:
+        # Capture direct replies to a pinned video note in Telegram so they appear inside the Mini App!
+        if msg.reply_to_message and msg.from_user and not msg.from_user.is_bot:
+            cleaned = " ".join(msg.text.split())
+            if cleaned and not cleaned.startswith("/"):
+                pin = get_pin_by_message(msg.chat_id, msg.reply_to_message.message_id)
+                if pin:
+                    user = msg.from_user
+                    user_name = user.full_name or user.username or str(user.id)
+                    add_pin_comment(msg.chat_id, pin["id"], user.id, user_name, cleaned[:MAX_COMMENT_LEN], message_id=msg.message_id)
+                    track("pin_commented", chat_id=msg.chat_id, user_id=user.id)
         return
 
-    user_id = update.message.from_user.id
-    text = update.message.text.strip()
-    chat_id = update.message.chat_id
+    user_id = msg.from_user.id
+    text = msg.text.strip()
+    chat_id = msg.chat_id
     prompt_id = pending["prompt_id"]
-    user_msg_id = update.message.message_id
+    user_msg_id = msg.message_id
 
     if text in ("/none", "/skip", "none", "skip"):
         if text in ("/none", "none"):
             set_user_pref(user_id, "pin_emoji", None)
-            reply = await update.message.reply_text("✅ Custom emoji removed.")
+            reply = await msg.reply_text("✅ Custom emoji removed.")
         else:
-            reply = await update.message.reply_text("Skipped.")
+            reply = await msg.reply_text("Skipped.")
     elif len(text) <= 10:
         set_user_pref(user_id, "pin_emoji", text)
-        reply = await update.message.reply_text(f"Pin emoji set to {text}!")
+        reply = await msg.reply_text(f"Pin emoji set to {text}!")
     else:
-        reply = await update.message.reply_text("❌ That's too long. Send a single emoji or /none.")
+        reply = await msg.reply_text("❌ That's too long. Send a single emoji or /none.")
 
     await asyncio.sleep(3)
     for mid in (prompt_id, user_msg_id, reply.message_id):
@@ -311,6 +342,53 @@ async def handle_emoji_text(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await context.bot.delete_message(chat_id, mid)
         except Exception:
             pass
+
+
+async def handle_message_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sync native Telegram emoji reactions on pinned video notes directly into the Mini App.
+
+    Requires the bot to be a group admin (Telegram only delivers message_reaction updates to admins).
+    Bot-authored reactions are ignored so mirroring Mini App reactions back to Telegram never loops."""
+    mr = update.message_reaction
+    if not mr:
+        return
+    if mr.user:
+        if mr.user.is_bot:
+            return
+        actor_id = mr.user.id
+    elif mr.actor_chat:
+        actor_id = mr.actor_chat.id
+    else:
+        return
+
+    def _extract(reactions) -> set[str]:
+        out: set[str] = set()
+        for r in reactions or ():
+            if isinstance(r, ReactionTypeEmoji):
+                norm = normalize_reaction_emoji(r.emoji)
+                if norm:
+                    out.add(norm)
+        return out
+
+    old_set = _extract(mr.old_reaction)
+    new_set = _extract(mr.new_reaction)
+    added = new_set - old_set
+    removed = old_set - new_set
+    if not added and not removed:
+        return
+
+    pin_id = sync_telegram_reactions(mr.chat.id, mr.message_id, actor_id, added, removed)
+    logger.info(
+        "Telegram reaction chat=%s msg=%s actor=%s +%s -%s -> pin_id=%s",
+        mr.chat.id,
+        mr.message_id,
+        actor_id,
+        sorted(added),
+        sorted(removed),
+        pin_id,
+    )
+    if pin_id and added:
+        track("pin_reacted", chat_id=mr.chat.id, user_id=actor_id)
 
 
 async def handle_pref_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -647,7 +725,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     message = update.message
 
-    if not message.video_note:
+    if not message or not message.video_note:
         return
 
     file_id = message.video_note.file_id
@@ -741,6 +819,8 @@ async def reverse_geocode(lat, lng):
 
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
     location = update.message.location
     if not location:
         return
@@ -1052,6 +1132,7 @@ async def _send_throwback(bot, chat_id: int, pins: list[dict], *, is_on_this_day
     try:
         vmsg = await bot.send_video_note(chat_id=chat_id, video_note=featured["video_file_id"])
         video_msg_id = vmsg.message_id
+        register_pin_message_alias(chat_id, video_msg_id, featured["id"])
     except (Forbidden, BadRequest) as e:
         # If the bot was removed/blocked, abort so we don't also fail on send_message.
         if isinstance(e, Forbidden) or "chat not found" in str(e).lower():

@@ -1,6 +1,6 @@
 // Entry point: parses the start params, branches to location-share mode, then boots the map.
 import { state } from './state.js';
-import { extractChatIdFromStartParam, extractTripIdFromStartParam, extractDateFromStartParam } from './util.js';
+import { extractChatIdFromStartParam, extractTripIdFromStartParam, extractDateFromStartParam, showToast } from './util.js';
 import { authHeaders } from './api.js';
 import { startLocationShare } from './location-share.js';
 import { populateFilters, loadPins, initFilters, getServerFilterParams } from './filters.js';
@@ -131,6 +131,92 @@ initDetail();
 initStats();
 initReel();
 initRelocate();
+
+// "Center on my location" pinpoint: tries Telegram LocationManager (Bot API 8.0+) first, then
+// falls back to browser navigator.geolocation. Places a pulsing blue dot beneath video markers.
+var userLocMarker = null;
+var locatingUser = false;
+
+function placeUserLocation(lat, lng) {
+  if (!userLocMarker) {
+    var icon = L.divIcon({
+      className: 'user-loc-marker',
+      html: '<div class="ul-pulse"></div><div class="ul-dot"></div>',
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+    });
+    userLocMarker = L.marker([lat, lng], { icon: icon, interactive: false, zIndexOffset: -500 }).addTo(map);
+  } else {
+    userLocMarker.setLatLng([lat, lng]);
+  }
+  state.skipBoundsFit = true;
+  map.flyTo([lat, lng], Math.max(map.getZoom(), 15), { duration: 0.7 });
+  try {
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+  } catch (_) { /* outside Telegram */ }
+}
+
+function locateMe() {
+  if (locatingUser) return;
+  var btn = document.getElementById('locate-me');
+  locatingUser = true;
+  if (btn) btn.classList.add('locating');
+
+  var finished = false;
+  function finish(lat, lng, errMsg) {
+    if (finished) return;
+    finished = true;
+    locatingUser = false;
+    if (btn) btn.classList.remove('locating');
+    if (lat != null && lng != null) {
+      placeUserLocation(lat, lng);
+    } else if (errMsg) {
+      showToast(errMsg);
+    }
+  }
+
+  function tryBrowserGeo() {
+    if (!navigator.geolocation) {
+      finish(null, null, 'Location is not available on this device.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) { finish(pos.coords.latitude, pos.coords.longitude); },
+      function () { finish(null, null, 'Allow location access to center on your spot.'); },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  }
+
+  var lm = tg && tg.LocationManager;
+  if (tg && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0') && lm) {
+    var wd = setTimeout(tryBrowserGeo, 10000);
+    var readLm = function () {
+      if (!lm.isLocationAvailable) { clearTimeout(wd); tryBrowserGeo(); return; }
+      try {
+        lm.getLocation(function (loc) {
+          clearTimeout(wd);
+          if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+            finish(loc.latitude, loc.longitude);
+          } else if (lm.isAccessRequested && !lm.isAccessGranted) {
+            finish(null, null, 'Location access is off — enable it in Telegram settings.');
+          } else {
+            tryBrowserGeo();
+          }
+        });
+      } catch (_) {
+        clearTimeout(wd);
+        tryBrowserGeo();
+      }
+    };
+    if (lm.isInited) readLm();
+    else lm.init(readLm);
+  } else {
+    tryBrowserGeo();
+  }
+}
+
+var locateBtn = document.getElementById('locate-me');
+if (locateBtn) locateBtn.addEventListener('click', locateMe);
 
 document.body.addEventListener('click', function (e) {
   var btn = e.target.closest('#view-all');
