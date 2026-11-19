@@ -6,7 +6,17 @@ dependencies = [
     "python-telegram-bot>=21.10",
     "aiohttp>=3.11.12",
     "python-dotenv>=1.1.0",
-    "pillow>=11.3.0",
+    "pillow>=11.0.0,<11.1.0",
+]
+
+[[tool.uv.index]]
+name = "piwheels"
+url = "https://www.piwheels.org/simple"
+explicit = true
+
+[tool.uv.sources]
+pillow = [
+    { index = "piwheels", marker = "sys_platform == 'linux' and (platform_machine == 'armv6l' or platform_machine == 'armv7l')" },
 ]
 
 [project.optional-dependencies]
