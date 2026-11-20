@@ -825,6 +825,51 @@ def delete_chat_pins(chat_id):
         conn.close()
 
 
+def migrate_chat_data(old_chat_id, new_chat_id):
+    """Move a basic group's data to the supergroup it was upgraded to. Returns the number of pins moved.
+
+    Idempotent: Telegram announces a migration in both chats, and startup can also detect it, so later calls find nothing left.
+    Message ids from the old group mean nothing in the supergroup (whose ids restart at 1), so every stored reference to
+    an old message is cleared rather than carried over, where it could match an unrelated new message. A pin's
+    message_id is NOT NULL, so 0 stands for "no Telegram message" (real ids are >= 1; get_pin_message_ref callers
+    already treat 0 as missing). Payments and analytics stay under the old id as historical records.
+    """
+    if old_chat_id == new_chat_id:
+        return 0
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        conn.isolation_level = None
+        c = conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("UPDATE pins SET chat_id = ?, message_id = 0 WHERE chat_id = ?", (new_chat_id, old_chat_id))
+        moved = c.rowcount
+        c.execute("UPDATE pin_comments SET chat_id = ?, message_id = NULL WHERE chat_id = ?", (new_chat_id, old_chat_id))
+        c.execute("DELETE FROM pin_message_aliases WHERE chat_id = ?", (old_chat_id,))
+        c.execute("UPDATE trips SET chat_id = ?, checklist_msg_id = NULL WHERE chat_id = ?", (new_chat_id, old_chat_id))
+        c.execute("UPDATE chat_entitlements SET chat_id = ? WHERE chat_id = ?", (new_chat_id, old_chat_id))
+        # Composite-key tables: a row already present under the new id wins; whatever couldn't move is dropped.
+        c.execute("UPDATE OR IGNORE chat_trip_users SET chat_id = ? WHERE chat_id = ?", (new_chat_id, old_chat_id))
+        c.execute("DELETE FROM chat_trip_users WHERE chat_id = ?", (old_chat_id,))
+        c.execute(
+            "UPDATE OR IGNORE pending_pins SET chat_id = ?, message_id = 0, prompt_msg_id = NULL WHERE chat_id = ?",
+            (new_chat_id, old_chat_id),
+        )
+        c.execute("DELETE FROM pending_pins WHERE chat_id = ?", (old_chat_id,))
+        c.execute(
+            "UPDATE OR IGNORE chat_settings SET chat_id = ?, pinned_map_msg_id = NULL, updated_at = ? WHERE chat_id = ?",
+            (new_chat_id, datetime.now(timezone.utc).isoformat(), old_chat_id),
+        )
+        c.execute("DELETE FROM chat_settings WHERE chat_id = ?", (old_chat_id,))
+        c.execute("COMMIT")
+        return moved
+    except Exception:
+        if conn.in_transaction:
+            c.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 def get_all_chat_ids():
     """Every chat we hold data for — pins, trips, or trip rosters. Startup cleanup iterates these to
     purge chats the bot was removed from; trips can create chat-scoped data before any pin exists, so
