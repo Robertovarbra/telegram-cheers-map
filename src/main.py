@@ -28,6 +28,7 @@ from telegram_handlers import (
     handle_location,
     handle_message_reaction,
     handle_my_chat_member,
+    handle_new_chat_title,
     handle_pre_checkout_query,
     handle_pref_callback,
     handle_successful_payment,
@@ -180,6 +181,7 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT, handle_emoji_text))
     application.add_handler(MessageHandler(filters.VIDEO_NOTE & ~filters.UpdateType.EDITED_MESSAGE, handle_video))
     application.add_handler(MessageHandler(filters.LOCATION & ~filters.UpdateType.EDITED_MESSAGE, handle_location))
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_TITLE, handle_new_chat_title))
     application.add_handler(MessageReactionHandler(handle_message_reaction))
     application.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 
