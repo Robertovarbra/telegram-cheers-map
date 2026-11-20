@@ -24,6 +24,7 @@ from telegram_handlers import (
     cleanup_inactive_chats,
     color_command,
     emoji_command,
+    handle_chat_migration,
     handle_emoji_text,
     handle_location,
     handle_message_reaction,
@@ -182,6 +183,7 @@ async def main() -> None:
     application.add_handler(MessageHandler(filters.VIDEO_NOTE & ~filters.UpdateType.EDITED_MESSAGE, handle_video))
     application.add_handler(MessageHandler(filters.LOCATION & ~filters.UpdateType.EDITED_MESSAGE, handle_location))
     application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_TITLE, handle_new_chat_title))
+    application.add_handler(MessageHandler(filters.StatusUpdate.MIGRATE, handle_chat_migration))
     application.add_handler(MessageReactionHandler(handle_message_reaction))
     application.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
 

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from aiohttp import ClientSession
 from telegram import Chat, ChatMember, InlineKeyboardButton, InlineKeyboardMarkup, ReactionTypeEmoji, Update
-from telegram.error import BadRequest, Forbidden
+from telegram.error import BadRequest, ChatMigrated, Forbidden
 from telegram.ext import ContextTypes
 
 from auth import is_member
@@ -34,6 +34,7 @@ from database import (
     get_trip_pins_for_reel,
     is_trip_reel_unlocked,
     mark_throwback_sent,
+    migrate_chat_data,
     normalize_reaction_emoji,
     pop_pending_pin,
     record_payment_and_grant,
@@ -904,6 +905,10 @@ async def cleanup_inactive_chats(bot):
             # (or were renamed while the bot was offline) would otherwise show the "Group" placeholder.
             if chat.title:
                 set_chat_title(chat_id, chat.title)
+        except ChatMigrated as e:
+            # Upgraded to a supergroup while we weren't listening (or before migrations were handled): its data is
+            # still under the dead basic-group id, where nothing can reach it. Move it rather than purge it.
+            await _migrate_chat(bot, chat_id, e.new_chat_id)
         except Forbidden:
             deleted = delete_chat_pins(chat_id)
             logger.info("Chat %s: Forbidden (bot was kicked). Deleted %s pin(s).", chat_id, deleted)
@@ -935,6 +940,31 @@ def _is_in_chat(member):
     if member.status == ChatMember.RESTRICTED:
         return bool(member.is_member)
     return False
+
+
+async def _migrate_chat(bot, old_chat_id, new_chat_id, new_title=None):
+    """Move a basic group's data to its supergroup and cache the supergroup's name for My Atlas."""
+    moved = migrate_chat_data(old_chat_id, new_chat_id)
+    logger.info("Chat %s migrated to supergroup %s. Moved %s pin(s).", old_chat_id, new_chat_id, moved)
+    if not new_title:
+        try:
+            new_title = (await bot.get_chat(new_chat_id)).title
+        except Exception:
+            logger.debug("Could not fetch title for migrated chat %s", new_chat_id, exc_info=True)
+    if new_title:
+        set_chat_title(new_chat_id, new_title)
+
+
+async def handle_chat_migration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A basic group was upgraded to a supergroup, which gets a new chat id. Telegram posts a service message in
+    both chats (migrate_to in the old one, migrate_from in the new one); either one moves the data, the other is a no-op."""
+    message = update.effective_message
+    if not message:
+        return
+    if message.migrate_to_chat_id:
+        await _migrate_chat(context.bot, message.chat_id, message.migrate_to_chat_id)
+    elif message.migrate_from_chat_id:
+        await _migrate_chat(context.bot, message.migrate_from_chat_id, message.chat_id, message.chat.title)
 
 
 async def handle_new_chat_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
