@@ -897,8 +897,13 @@ async def cleanup_inactive_chats(bot):
                     deleted = delete_chat_pins(chat_id)
                     logger.info("Chat %s: Bot is %s. Deleted %s pin(s).", chat_id, member.status, deleted)
                     total_deleted += deleted
+                    continue
             except Exception:
                 pass
+            # Backfill/refresh the cached group name for My Atlas; groups that predate the chat_title column
+            # (or were renamed while the bot was offline) would otherwise show the "Group" placeholder.
+            if chat.title:
+                set_chat_title(chat_id, chat.title)
         except Forbidden:
             deleted = delete_chat_pins(chat_id)
             logger.info("Chat %s: Forbidden (bot was kicked). Deleted %s pin(s).", chat_id, deleted)
@@ -930,6 +935,13 @@ def _is_in_chat(member):
     if member.status == ChatMember.RESTRICTED:
         return bool(member.is_member)
     return False
+
+
+async def handle_new_chat_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Keep the cached group name in sync when a group is renamed (service messages arrive even in privacy mode)."""
+    message = update.effective_message
+    if message and message.new_chat_title:
+        set_chat_title(message.chat_id, message.new_chat_title)
 
 
 async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
